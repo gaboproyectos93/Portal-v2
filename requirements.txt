@@ -1,2 +1,13 @@
-fpdf
 streamlit
+pandas
+fpdf
+gspread
+oauth2client
+Pillow
+streamlit-cookies-controller
+google-api-python-client
+PyMuPDF
+google-auth
+google-auth-httplib2
+google-auth-oauthlib
+supabase
