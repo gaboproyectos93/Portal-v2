@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import io
 import os
+import time  # <-- LIBRERÍA AGREGADA PARA EVITAR EL ERROR
 from fpdf import FPDF
 from datetime import datetime
 import re
@@ -91,13 +92,11 @@ def generar_pdf_v2(correlativo, patente, cliente, items, total):
 # ==========================================
 def subir_pdf_a_storage(nombre_archivo, pdf_bytes):
     try:
-        # Sube el archivo de forma directa al nuevo Bucket que creaste
         supabase.storage.from_("pdf_cotizaciones").upload(
             path=nombre_archivo,
             file=pdf_bytes,
             file_options={"content-type": "application/pdf"}
         )
-        # Rescata el link público permanente
         url = supabase.storage.from_("pdf_cotizaciones").get_public_url(nombre_archivo)
         return url
     except:
@@ -105,7 +104,6 @@ def subir_pdf_a_storage(nombre_archivo, pdf_bytes):
 
 def registrar_solicitud_gabo(patente, cliente, origen, descripcion):
     try:
-        # Deja la tarea guardada en el historial en estado 'Requerido'
         supabase.table("historial_trabajos").insert({
             "patente": patente if patente else None,
             "nombre_cliente_manual": cliente,
@@ -152,7 +150,6 @@ if st.session_state.usuario is None:
                 st.error("Credenciales Incorrectas. Inténtalo nuevamente.")
     st.stop()
 
-# Botón para cerrar sesión en la barra lateral
 with st.sidebar:
     st.markdown(f"**Usuario Conectado:** {st.session_state.usuario}")
     if st.button("🔒 Cerrar Sesión", use_container_width=True):
@@ -163,9 +160,6 @@ with st.sidebar:
 # 5. DESARROLLO DE VISTAS SEGMENTADAS
 # ==========================================
 
-# ------------------------------------------
-# A. PANTALLA EXCLUSIVA DE GABO (PLANIFICADOR)
-# ------------------------------------------
 if st.session_state.usuario == "Gabo":
     st.title("🎛️ Centro de Operaciones y Planificación (Gabo)")
     
@@ -190,7 +184,6 @@ if st.session_state.usuario == "Gabo":
     df_global = extraer_historial_completo()
     
     if not df_global.empty:
-        # Buscador General estilo Lupa
         busqueda = st.text_input("🔍 Buscar por Patente o Cliente...").upper()
         if busqueda:
             df_global = df_global[
@@ -201,15 +194,11 @@ if st.session_state.usuario == "Gabo":
     else:
         st.info("No hay registros en el historial todavía.")
 
-# ------------------------------------------
-# B. PANTALLA EXCLUSIVA DE CRISTIAN (EJECUTOR)
-# ------------------------------------------
 elif st.session_state.usuario == "Cristian":
     st.title("🔧 Panel de Control del Taller (Cristian)")
     
     tab_pendientes, tab_historial = st.tabs(["📥 Órdenes por Generar", "🗂️ Historial y Descarga de PDFs"])
     
-    # PESTAÑA 1: SOLICITUDES DE GABO
     with tab_pendientes:
         st.subheader("Requerimientos asignados por Gabo")
         df_todo = extraer_historial_completo()
@@ -225,7 +214,6 @@ elif st.session_state.usuario == "Cristian":
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    # Activar mini-cotizador para responder a Gabo
                     with st.expander(f"⚙️ Cotizar Solicitud N° {fila['id_cotizacion']}"):
                         precio = st.number_input("Monto Total Neto Evaluado ($)", min_value=0, step=10000, key=f"p_{fila['id_cotizacion']}")
                         desc_trabajo = st.text_input("Detalle breve del trabajo realizado", key=f"d_{fila['id_cotizacion']}")
@@ -234,21 +222,17 @@ elif st.session_state.usuario == "Cristian":
                             total_con_iva = int(precio * 1.19)
                             items_mock = [{"Descripción": desc_trabajo, "Cantidad": 1, "Total_Costo": total_con_iva}]
                             
-                            # Genera el PDF binario
-                            pdf_data = generar_pdf_exacto = generar_pdf_v2(str(fila['id_cotizacion']), fila['patente'], fila['nombre_cliente_manual'], items_mock, total_con_iva)
-                            
-                            # Guarda el PDF en el bucket de Storage
+                            pdf_data = generar_pdf_v2(str(fila['id_cotizacion']), fila['patente'], fila['nombre_cliente_manual'], items_mock, total_con_iva)
                             nombre_archivo = f"Cotizacion_{fila['id_cotizacion']}.pdf"
                             url_publica = subir_pdf_a_storage(nombre_archivo, pdf_data)
                             
-                            # Actualiza el registro convirtiéndolo en 'Generado'
                             if url_publica:
                                 supabase.table("historial_trabajos").update({
                                     "estado": "Generado",
                                     "total_clp": total_con_iva,
                                     "pdf_url": url_publica
                                 }).eq("id_cotizacion", fila['id_cotizacion']).execute()
-                                st.success("✅ ¡Cotización procesada, guardada en la base de datos y PDF almacenado en la nube!")
+                                st.success("✅ ¡Cotización procesada y guardada en la nube!")
                                 time.sleep(1.5)
                                 st.rerun()
             else:
@@ -256,13 +240,11 @@ elif st.session_state.usuario == "Cristian":
         else:
             st.info("Sin solicitudes pendientes.")
 
-    # PESTAÑA 2: EL CONTROL HISTÓRICO CON BUSCADOR Y SECCIONES
     with tab_historial:
         st.subheader("🗃️ Registro General de Presupuestos")
         
         if not df_todo.empty:
-            # Lupa de búsqueda
-            lupa = st.text_input("🔍 Digita una Patente o Cliente para buscar en el historial...").upper()
+            lupa = st.text_input("🔍 Digita una Patente o Cliente para buscar...").upper()
             df_filtrado = df_todo.copy()
             if lupa:
                 df_filtrado = df_filtrado[
@@ -270,7 +252,6 @@ elif st.session_state.usuario == "Cristian":
                     df_filtrado['nombre_cliente_manual'].str.contains(lupa, na=False, case=False)
                 ]
             
-            # Segmentación por secciones solicitadas
             sec_generadas, sec_enviadas, sec_terminadas = st.tabs(["🟡 Solo Generadas", "🔵 Enviadas al Cliente", "🟢/⚫ Aprobadas y Terminadas"])
             
             with sec_generadas:
@@ -280,7 +261,7 @@ elif st.session_state.usuario == "Cristian":
                         c_a, c_b, c_c = st.columns([3, 1.5, 1])
                         c_a.write(f"📄 **N° {r['id_cotizacion']}** | Patente: {r['patente'] if r['patente'] else 'S/P'} | Cliente: {r['nombre_cliente_manual']} | **Total: ${r['total_clp']:,.0f}**")
                         if r['pdf_url']:
-                            c_b.markdown(f"[👁️ Ver PDF en Nube]({r['pdf_url']})")
+                            c_b.markdown(f"[👁️ Ver PDF]({r['pdf_url']})")
                         if c_c.button("✉️ Marcar Enviado", key=f"env_{r['id_cotizacion']}"):
                             supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
                             st.rerun()
