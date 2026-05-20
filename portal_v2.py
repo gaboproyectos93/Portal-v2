@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import io
 import os
-import time  # <-- LIBRERÍA AGREGADA PARA EVITAR EL ERROR
+import time 
 from fpdf import FPDF
 from datetime import datetime
 import re
@@ -30,7 +30,6 @@ except Exception as e:
     st.error(f"Error en enlace Supabase: {e}")
     supabase = None
 
-# Estilos personalizados para el ecosistema profesional
 st.markdown(f"""
 <style>
     .stTabs [aria-selected='true'] {{ background-color: {COLOR_PRIMARIO} !important; color: white !important; font-weight: bold; border-radius: 4px; }}
@@ -104,6 +103,14 @@ def subir_pdf_a_storage(nombre_archivo, pdf_bytes):
 
 def registrar_solicitud_gabo(patente, cliente, origen, descripcion):
     try:
+        # EVITA ERROR LLAVE FORÁNEA: Si hay patente, asegura que exista en el directorio primero
+        if patente:
+            supabase.table("directorio_vehiculos").upsert({
+                "patente": patente,
+                "nombre_contacto": cliente,
+                "origen_cliente": origen
+            }).execute()
+        
         supabase.table("historial_trabajos").insert({
             "patente": patente if patente else None,
             "nombre_cliente_manual": cliente,
@@ -184,13 +191,17 @@ if st.session_state.usuario == "Gabo":
     df_global = extraer_historial_completo()
     
     if not df_global.empty:
+        # PROTECCIÓN CONTRA KEYERROR: Reindexado seguro de la tabla histórica
+        columnas_deseadas = ['id_cotizacion', 'patente', 'nombre_cliente_manual', 'origen_trabajo', 'estado', 'total_clp', 'pdf_url']
+        df_global = df_global.reindex(columns=columnas_deseadas)
+        
         busqueda = st.text_input("🔍 Buscar por Patente o Cliente...").upper()
         if busqueda:
             df_global = df_global[
                 df_global['patente'].str.contains(busqueda, na=False) | 
                 df_global['nombre_cliente_manual'].str.contains(busqueda, na=False, case=False)
             ]
-        st.dataframe(df_global[['id_cotizacion', 'patente', 'nombre_cliente_manual', 'origen_trabajo', 'estado', 'total_clp', 'pdf_url']], use_container_width=True)
+        st.dataframe(df_global, use_container_width=True)
     else:
         st.info("No hay registros en el historial todavía.")
 
@@ -244,6 +255,10 @@ elif st.session_state.usuario == "Cristian":
         st.subheader("🗃️ Registro General de Presupuestos")
         
         if not df_todo.empty:
+            # Reindexado seguro para la sección de Cristian
+            columnas_deseadas = ['id_cotizacion', 'patente', 'nombre_cliente_manual', 'origen_trabajo', 'estado', 'total_clp', 'pdf_url']
+            df_todo = df_todo.reindex(columns=columnas_deseadas)
+            
             lupa = st.text_input("🔍 Digita una Patente o Cliente para buscar...").upper()
             df_filtrado = df_todo.copy()
             if lupa:
@@ -285,7 +300,7 @@ elif st.session_state.usuario == "Cristian":
             with sec_terminadas:
                 df_term = df_filtrado[df_filtrado['estado'].isin(['Aprobado', 'Terminado'])]
                 if not df_term.empty:
-                    st.dataframe(df_term[['id_cotizacion', 'patente', 'nombre_cliente_manual', 'estado', 'total_clp', 'pdf_url']], use_container_width=True)
+                    st.dataframe(df_term, use_container_width=True)
                 else:
                     st.write("No hay trabajos aprobados o terminados aún.")
         else:
