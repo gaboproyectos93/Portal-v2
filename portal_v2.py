@@ -40,7 +40,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. GENERADOR DE PDF Y UTILS
+# 2. GENERADOR DE PDF BLINDADO (A PRUEBA DE FALLOS)
 # ==========================================
 class PDF(FPDF):
     def __init__(self, correlativo=""): 
@@ -60,13 +60,18 @@ class PDF(FPDF):
         self.set_font('Arial', 'I', 8)
         self.cell(0, 10, f"RUT: {RUT_EMPRESA} | {DIRECCION}", 0, 0, 'C')
 
-def generar_pdf_v2(correlativo, patente, cliente, items, total):
+def crear_documento_pdf(correlativo, patente, cliente, items, total):
     pdf = PDF(correlativo=correlativo)
     pdf.add_page()
     pdf.set_font('Arial', '', 10)
     pdf.cell(0, 6, f"Fecha: {datetime.now().strftime('%d/%m/%Y')}", 0, 1)
-    pdf.cell(0, 6, f"Vehículo/Identificación: {patente if patente else 'SIN PATENTE'}", 0, 1)
-    pdf.cell(0, 6, f"Cliente: {cliente.upper()}", 0, 1)
+    
+    # Manejo seguro de textos nulos para evitar caídas
+    pat_str = str(patente) if pd.notna(patente) and patente else 'SIN PATENTE'
+    cli_str = str(cliente) if pd.notna(cliente) and cliente else 'CLIENTE NO REGISTRADO'
+    
+    pdf.cell(0, 6, f"Vehículo/Identificación: {pat_str.upper()}", 0, 1)
+    pdf.cell(0, 6, f"Cliente: {cli_str.upper()}", 0, 1)
     pdf.ln(5)
     
     pdf.set_font('Arial', 'B', 10)
@@ -76,15 +81,24 @@ def generar_pdf_v2(correlativo, patente, cliente, items, total):
     
     pdf.set_font('Arial', '', 10)
     for i in items:
-        pdf.cell(130, 6, i['Descripción'].upper(), 1, 0, 'L')
-        pdf.cell(20, 6, str(i['Cantidad']), 1, 0, 'C')
-        pdf.cell(40, 6, f"${i['Total_Costo']:,.0f}", 1, 1, 'R')
+        desc_str = str(i.get('Descripción', ''))
+        cant_str = str(i.get('Cantidad', 1))
+        tot_costo = i.get('Total_Costo', 0)
+        
+        pdf.cell(130, 6, desc_str.upper(), 1, 0, 'L')
+        pdf.cell(20, 6, cant_str, 1, 0, 'C')
+        pdf.cell(40, 6, f"${tot_costo:,.0f}", 1, 1, 'R')
         
     pdf.ln(5)
     pdf.set_font('Arial', 'B', 11)
     pdf.cell(150, 7, "TOTAL FINAL (CON IVA):", 0, 0, 'R')
     pdf.cell(40, 7, f"${total:,.0f}", 1, 1, 'R')
-    return pdf.output(dest='S').encode('latin-1')
+    
+    # Salida universal (Compatible con cualquier versión de FPDF)
+    resultado = pdf.output(dest='S')
+    if isinstance(resultado, str):
+        return resultado.encode('latin-1')
+    return bytes(resultado)
 
 # ==========================================
 # 3. INTERACCIÓN CON CONECTORES (SUPABASE)
@@ -98,23 +112,18 @@ def subir_pdf_a_storage(nombre_archivo, pdf_bytes):
         )
         url = supabase.storage.from_("pdf_cotizaciones").get_public_url(nombre_archivo)
         return url
-    except:
-        return None
+    except Exception as e:
+        raise Exception(f"Error en Storage Supabase: {e}")
 
 def registrar_solicitud_gabo(patente, cliente, origen, descripcion):
-    # DIAGNÓSTICO SEPARADO POR FASES
-    if patente:
-        try:
+    try:
+        if patente:
             supabase.table("directorio_vehiculos").upsert({
                 "patente": patente,
                 "nombre_contacto": cliente,
                 "origen_cliente": origen
             }).execute()
-        except Exception as e_dir:
-            st.error(f"❌ Error en la tabla 'directorio_vehiculos': {e_dir}")
-            return False
-    
-    try:
+            
         supabase.table("historial_trabajos").insert({
             "patente": patente if patente else None,
             "nombre_cliente_manual": cliente,
@@ -124,8 +133,8 @@ def registrar_solicitud_gabo(patente, cliente, origen, descripcion):
             "creado_por": "Gabo"
         }).execute()
         return True
-    except Exception as e_hist:
-        st.error(f"❌ Error en la tabla 'historial_trabajos': {e_hist}")
+    except Exception as e:
+        st.error(f"Error al registrar requerimiento: {e}")
         return False
 
 def extraer_historial_completo():
@@ -148,7 +157,7 @@ if st.session_state.usuario is None:
         st.write("")
         st.title("🔐 Acceso al Sistema V2")
         user_type = st.selectbox("Selecciona tu Perfil", ["--- Seleccione ---", "Gabriel Poblete (Planificación)", "Christian Herrera (Taller)"])
-        password = st.text_input("Contraseña de Accesso", type="password")
+        password = st.text_input("Contraseña de Acceso", type="password")
         
         if st.button("Ingresar al Portal", type="primary"):
             if user_type == "Gabriel Poblete (Planificación)" and password == "gabo2026":
@@ -223,7 +232,7 @@ elif st.session_state.usuario == "Cristian":
                 for idx, fila in df_req.iterrows():
                     st.markdown(f"""
                     <div class="card-requerido">
-                        <h4>🚗 Vehículo: {fila['patente'] if fila['patente'] else 'PROYECTO SIN PATENTE'} | Cliente: {fila['nombre_cliente_manual']}</h4>
+                        <h4>🚗 Vehículo: {fila['patente'] if pd.notna(fila['patente']) and fila['patente'] else 'PROYECTO SIN PATENTE'} | Cliente: {fila['nombre_cliente_manual']}</h4>
                         <p><strong>Instrucciones de Gabo:</strong> {fila['descripcion_requerimiento']}</p>
                     </div>
                     """, unsafe_allow_html=True)
@@ -233,22 +242,30 @@ elif st.session_state.usuario == "Cristian":
                         desc_trabajo = st.text_input("Detalle breve del trabajo realizado", key=f"d_{fila['id_cotizacion']}")
                         
                         if st.button("Finalizar y Guardar PDF en la Nube", key=f"b_{fila['id_cotizacion']}"):
-                            total_con_iva = int(precio * 1.19)
-                            items_mock = [{"Descripción": desc_trabajo, "Cantidad": 1, "Total_Costo": total_con_iva}]
-                            
-                            pdf_data = generar_pdf_v2(str(fila['id_cotizacion']), fila['patente'], fila['nombre_cliente_manual'], items_mock, total_con_iva)
-                            nombre_archivo = f"Cotizacion_{fila['id_cotizacion']}.pdf"
-                            url_publica = subir_pdf_a_storage(nombre_archivo, pdf_data)
-                            
-                            if url_publica:
-                                supabase.table("historial_trabajos").update({
-                                    "estado": "Generado",
-                                    "total_clp": total_con_iva,
-                                    "pdf_url": url_publica
-                                }).eq("id_cotizacion", fila['id_cotizacion']).execute()
-                                st.success("✅ ¡Cotización procesada y guardada en la nube!")
-                                time.sleep(1.5)
-                                st.rerun()
+                            # ESCUDO DE DIAGNÓSTICO
+                            try:
+                                total_con_iva = int(precio * 1.19)
+                                items_mock = [{"Descripción": desc_trabajo, "Cantidad": 1, "Total_Costo": total_con_iva}]
+                                
+                                # Inyección limpia con f-strings para evitar errores de tipo texto
+                                pdf_data = crear_documento_pdf(f"{fila['id_cotizacion']}", fila['patente'], fila['nombre_cliente_manual'], items_mock, total_con_iva)
+                                
+                                nombre_archivo = f"Cotizacion_{fila['id_cotizacion']}.pdf"
+                                url_publica = subir_pdf_a_storage(nombre_archivo, pdf_data)
+                                
+                                if url_publica:
+                                    supabase.table("historial_trabajos").update({
+                                        "estado": "Generado",
+                                        "total_clp": total_con_iva,
+                                        "pdf_url": url_publica
+                                    }).eq("id_cotizacion", fila['id_cotizacion']).execute()
+                                    st.success("✅ ¡Cotización procesada y guardada en la nube!")
+                                    time.sleep(1.5)
+                                    st.rerun()
+                                else:
+                                    st.error("Error: No se generó el link del archivo en Storage.")
+                            except Exception as err:
+                                st.error(f"❌ Error Interno Detectado: {type(err).__name__} - {err}")
             else:
                 st.info("¡Al día! No tienes solicitudes pendientes de cotizar.")
         else:
@@ -276,7 +293,7 @@ elif st.session_state.usuario == "Cristian":
                 if not df_gen.empty:
                     for idx, r in df_gen.iterrows():
                         c_a, c_b, c_c = st.columns([3, 1.5, 1])
-                        c_a.write(f"📄 **N° {r['id_cotizacion']}** | Patente: {r['patente'] if r['patente'] else 'S/P'} | Cliente: {r['nombre_cliente_manual']} | **Total: ${r['total_clp']:,.0f}**")
+                        c_a.write(f"📄 **N° {r['id_cotizacion']}** | Patente: {r['patente'] if pd.notna(r['patente']) and r['patente'] else 'S/P'} | Cliente: {r['nombre_cliente_manual']} | **Total: ${r['total_clp']:,.0f}**")
                         if r['pdf_url']:
                             c_b.markdown(f"[👁️ Ver PDF]({r['pdf_url']})")
                         if c_c.button("✉️ Marcar Enviado", key=f"env_{r['id_cotizacion']}"):
@@ -290,7 +307,7 @@ elif st.session_state.usuario == "Cristian":
                 if not df_env.empty:
                     for idx, r in df_env.iterrows():
                         c_a, c_b, c_c = st.columns([3, 1.5, 1])
-                        c_a.write(f"🔵 **N° {r['id_cotizacion']}** | Patente: {r['patente'] if r['patente'] else 'S/P'} | Cliente: {r['nombre_cliente_manual']} | **Total: ${r['total_clp']:,.0f}**")
+                        c_a.write(f"🔵 **N° {r['id_cotizacion']}** | Patente: {r['patente'] if pd.notna(r['patente']) and r['patente'] else 'S/P'} | Cliente: {r['nombre_cliente_manual']} | **Total: ${r['total_clp']:,.0f}**")
                         if r['pdf_url']:
                             c_b.markdown(f"[📥 Descargar PDF]({r['pdf_url']})")
                         if c_c.button("🟢 Aprobar", key=f"apr_{r['id_cotizacion']}"):
