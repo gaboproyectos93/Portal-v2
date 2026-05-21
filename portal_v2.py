@@ -45,7 +45,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. GENERADOR DE PDF OFICIAL (C.H. AUTOMOTRIZ)
+# 2. GENERADOR DE PDF OFICIAL
 # ==========================================
 def encontrar_imagen(n):
     for ext in ['.jpg', '.png', '.jpeg']:
@@ -197,6 +197,17 @@ def generar_pdf_exacto(patente, marca, modelo, cliente_nombre, cliente_rut, item
 # ==========================================
 # 3. INTERACCIÓN CON CONECTORES (SUPABASE)
 # ==========================================
+
+# ¡FUNCIÓN RE-AGREGADA PARA RECONOCER PATENTES!
+def buscar_vehiculo_supabase(patente_input):
+    p_clean = re.sub(r'[^A-Z0-9]', '', str(patente_input).upper())
+    if not p_clean or not supabase: return None
+    try:
+        res = supabase.table("directorio_vehiculos").select("*").ilike("patente", p_clean).execute()
+        if res.data: return res.data[0]
+    except: pass
+    return None
+
 @st.cache_data(ttl=86400)
 def cargar_catalogo_vehiculos():
     base_def = {"--- Seleccione Marca ---": ["---"]}
@@ -280,14 +291,32 @@ if st.session_state.usuario == "Gabo":
     
     with st.expander("➕ Solicitar Nueva Cotización", expanded=True):
         c1, c2, c3 = st.columns([1.5, 2, 1.5])
-        pat = c1.text_input("Patente (Opcional)").upper()
-        cli = c2.text_input("Cliente / Institución")
-        origen = c3.selectbox("Canal", ["Kaufmann", "Propio Cristian"])
+        
+        with c1:
+            pat = st.text_input("Patente (Opcional)", key="g_pat").upper()
+            # BOTÓN DE AUTOCOMPLETADO PARA GABO
+            if st.button("🔍 Autocompletar Datos", use_container_width=True):
+                v_db = buscar_vehiculo_supabase(pat)
+                if v_db:
+                    st.session_state.g_cli = v_db.get('nombre_contacto', '')
+                    st.session_state.g_ori = v_db.get('origen_cliente', 'Kaufmann')
+                    st.rerun()
+                else:
+                    st.warning("Patente no registrada")
+                    
+        cli = c2.text_input("Cliente / Institución", value=st.session_state.get('g_cli', ''))
+        
+        ops_ori = ["Kaufmann", "Propio Cristian"]
+        idx_ori = ops_ori.index(st.session_state.get('g_ori', 'Kaufmann')) if st.session_state.get('g_ori') in ops_ori else 0
+        origen = c3.selectbox("Canal", ops_ori, index=idx_ori)
+        
         desc = st.text_area("Instrucciones para Cristian")
         
         if st.button("Enviar Orden al Taller", type="primary"):
             if cli and desc:
                 if registrar_solicitud_gabo(pat, cli, origen, desc):
+                    if 'g_cli' in st.session_state: del st.session_state['g_cli']
+                    if 'g_ori' in st.session_state: del st.session_state['g_ori']
                     st.success("🚀 Solicitud enviada exitosamente a la bandeja de Cristian.")
                     time.sleep(1.5)
                     st.rerun()
@@ -306,7 +335,6 @@ if st.session_state.usuario == "Gabo":
 # ==========================================
 elif st.session_state.usuario == "Cristian":
     
-    # Navegación Lateral Exclusiva para Cristian
     with st.sidebar:
         st.markdown("---")
         if st.button("📥 Bandeja de Requerimientos"):
@@ -315,16 +343,13 @@ elif st.session_state.usuario == "Cristian":
         if st.button("🚀 Nueva Cotización Libre"):
             st.session_state.vista_taller = "Cotizador"
             st.session_state.paso_actual = 1
-            st.session_state.solicitud_activa = None # Limpiamos cualquier rastro de Gabo
+            st.session_state.solicitud_activa = None
             st.session_state.patente_confirmada = ""
             st.rerun()
         if st.button("🗂️ Historial General"):
             st.session_state.vista_taller = "Historial"
             st.rerun()
 
-    # ----------------------------------------
-    # MÓDULO A: BANDEJA DE ENTRADA (KANBAN)
-    # ----------------------------------------
     if st.session_state.vista_taller == "Bandeja":
         st.title("📥 Requerimientos Pendientes")
         df_todo = extraer_historial_completo()
@@ -340,7 +365,6 @@ elif st.session_state.usuario == "Cristian":
                     """, unsafe_allow_html=True)
                     
                     if st.button(f"⚙️ Atender Solicitud N° {fila['id_cotizacion']}", key=f"btn_{fila['id_cotizacion']}", type="primary"):
-                        # Se inyectan los datos de Gabo en la memoria del cotizador y se salta al Paso 2
                         st.session_state.solicitud_activa = fila['id_cotizacion']
                         st.session_state.patente_confirmada = fila['patente'] if pd.notna(fila['patente']) else ""
                         st.session_state.cliente_predefinido = fila['nombre_cliente_manual']
@@ -351,22 +375,26 @@ elif st.session_state.usuario == "Cristian":
             else: st.success("¡Al día! No hay requerimientos pendientes.")
         else: st.info("Historial vacío.")
 
-    # ----------------------------------------
-    # MÓDULO B: EL COTIZADOR ROBUSTO (FASE 1)
-    # ----------------------------------------
     elif st.session_state.vista_taller == "Cotizador":
         
-        # PANTALLA 1: Búsqueda (Solo aparece si Cristian hace una cotización libre)
         if st.session_state.paso_actual == 1:
             st.title("Cotizador Automotriz Libre")
             pat_texto = st.text_input("Ingresa Patente (Opcional)").upper()
             if st.button("🚀 INICIAR", type="primary", use_container_width=True):
                 st.session_state.patente_confirmada = pat_texto
-                st.session_state.cliente_predefinido = ""
+                
+                # AUTOCOMPLETADO AUTOMÁTICO PARA CRISTIAN
+                datos_db = buscar_vehiculo_supabase(pat_texto)
+                if datos_db:
+                    st.session_state.cliente_predefinido = datos_db.get('nombre_contacto', '')
+                    st.session_state.origen_predefinido = datos_db.get('origen_cliente', 'Propio Cristian')
+                else:
+                    st.session_state.cliente_predefinido = ""
+                    st.session_state.origen_predefinido = "Propio Cristian"
+                    
                 st.session_state.paso_actual = 2
                 st.rerun()
 
-        # PANTALLA 2: Formularios, Calculadora y PDF
         elif st.session_state.paso_actual == 2:
             p_in = st.session_state.get('patente_confirmada', '')
             sol_id = st.session_state.get('solicitud_activa')
@@ -374,13 +402,11 @@ elif st.session_state.usuario == "Cristian":
             st.markdown(f"### 📋 Cotización en curso: **{p_in if p_in else 'SIN PATENTE'}**")
             if sol_id: st.info(f"Asociado al requerimiento N° {sol_id} de Gabo")
             
-            # Formulario de Cliente
             cf1, cf2, cf3 = st.columns([2, 1, 2])
             cli_fac = cf1.text_input("Nombre Cliente / Institución", value=st.session_state.get('cliente_predefinido', ''))
             rut_fac = cf2.text_input("RUT (Opcional)")
             us_final = cf3.text_input("Usuario Final", value=cli_fac)
             
-            # Vehículo y Origen
             cv1, cv2, cv3 = st.columns([1.5, 1.5, 1])
             marcas_disp = list(CATALOGO.keys())
             marca_sel = cv1.selectbox("Marca", marcas_disp)
@@ -388,12 +414,11 @@ elif st.session_state.usuario == "Cristian":
             modelo_sel = cv2.selectbox("Modelo", modelos_disp)
             
             opciones_origen = ["Kaufmann", "Propio Cristian"]
-            idx_origen = opciones_origen.index(st.session_state.get('origen_predefinido', 'Propio Cristian')) if 'origen_predefinido' in st.session_state else 1
+            idx_origen = opciones_origen.index(st.session_state.get('origen_predefinido', 'Propio Cristian')) if st.session_state.get('origen_predefinido') in opciones_origen else 1
             origen_sel = cv3.selectbox("Canal", opciones_origen, index=idx_origen)
             
             st.markdown("---")
             
-            # Calculadora robusta
             sel_final = []
             tabs = st.tabs(["➕ Ingreso Manual", "🛒 Repuestos"])
             with tabs[0]:
@@ -462,7 +487,6 @@ elif st.session_state.usuario == "Cristian":
                     if st.button("💾 GENERAR PDF Y GUARDAR", type="primary", use_container_width=True):
                         with st.spinner("Conectando con Servidor..."):
                             try:
-                                # Lógica Maestra: ¿Actualizar Requerimiento o Crear Nuevo?
                                 if sol_id:
                                     corr_id = str(sol_id)
                                     pdf_b = generar_pdf_exacto(p_in, marca_sel, modelo_sel, cli_fac, rut_fac, sel_final, tn, False, est, us_final, obs, corr_id)
@@ -471,7 +495,6 @@ elif st.session_state.usuario == "Cristian":
                                     
                                     supabase.table("historial_trabajos").update({"estado": "Generado", "total_clp": tf, "pdf_url": url_doc, "origen_trabajo": origen_sel}).eq("id_cotizacion", sol_id).execute()
                                 else:
-                                    # Insertar primero para obtener el correlativo automático
                                     res = supabase.table("historial_trabajos").insert({"patente": p_in if p_in else None, "nombre_cliente_manual": cli_fac, "origen_trabajo": origen_sel, "estado": "Generado", "total_clp": tf, "creado_por": "Cristian"}).execute()
                                     corr_id = str(res.data[0]['id_cotizacion'])
                                     
@@ -497,9 +520,6 @@ elif st.session_state.usuario == "Cristian":
                         st.session_state.vista_taller = "Bandeja"
                         st.rerun()
 
-    # ----------------------------------------
-    # MÓDULO C: HISTORIAL HISTÓRICO
-    # ----------------------------------------
     elif st.session_state.vista_taller == "Historial":
         st.title("🗃️ Registro General")
         df_todo = extraer_historial_completo()
