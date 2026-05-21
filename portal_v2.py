@@ -102,15 +102,19 @@ def subir_pdf_a_storage(nombre_archivo, pdf_bytes):
         return None
 
 def registrar_solicitud_gabo(patente, cliente, origen, descripcion):
-    try:
-        # EVITA ERROR LLAVE FORÁNEA: Si hay patente, asegura que exista en el directorio primero
-        if patente:
+    # DIAGNÓSTICO SEPARADO POR FASES
+    if patente:
+        try:
             supabase.table("directorio_vehiculos").upsert({
                 "patente": patente,
                 "nombre_contacto": cliente,
                 "origen_cliente": origen
             }).execute()
-        
+        except Exception as e_dir:
+            st.error(f"❌ Error en la tabla 'directorio_vehiculos': {e_dir}")
+            return False
+    
+    try:
         supabase.table("historial_trabajos").insert({
             "patente": patente if patente else None,
             "nombre_cliente_manual": cliente,
@@ -120,8 +124,8 @@ def registrar_solicitud_gabo(patente, cliente, origen, descripcion):
             "creado_por": "Gabo"
         }).execute()
         return True
-    except Exception as e:
-        st.error(f"Error al registrar requerimiento: {e}")
+    except Exception as e_hist:
+        st.error(f"❌ Error en la tabla 'historial_trabajos': {e_hist}")
         return False
 
 def extraer_historial_completo():
@@ -144,7 +148,7 @@ if st.session_state.usuario is None:
         st.write("")
         st.title("🔐 Acceso al Sistema V2")
         user_type = st.selectbox("Selecciona tu Perfil", ["--- Seleccione ---", "Gabriel Poblete (Planificación)", "Christian Herrera (Taller)"])
-        password = st.text_input("Contraseña de Acceso", type="password")
+        password = st.text_input("Contraseña de Accesso", type="password")
         
         if st.button("Ingresar al Portal", type="primary"):
             if user_type == "Gabriel Poblete (Planificación)" and password == "gabo2026":
@@ -191,7 +195,6 @@ if st.session_state.usuario == "Gabo":
     df_global = extraer_historial_completo()
     
     if not df_global.empty:
-        # PROTECCIÓN CONTRA KEYERROR: Reindexado seguro de la tabla histórica
         columnas_deseadas = ['id_cotizacion', 'patente', 'nombre_cliente_manual', 'origen_trabajo', 'estado', 'total_clp', 'pdf_url']
         df_global = df_global.reindex(columns=columnas_deseadas)
         
@@ -255,7 +258,6 @@ elif st.session_state.usuario == "Cristian":
         st.subheader("🗃️ Registro General de Presupuestos")
         
         if not df_todo.empty:
-            # Reindexado seguro para la sección de Cristian
             columnas_deseadas = ['id_cotizacion', 'patente', 'nombre_cliente_manual', 'origen_trabajo', 'estado', 'total_clp', 'pdf_url']
             df_todo = df_todo.reindex(columns=columnas_deseadas)
             
