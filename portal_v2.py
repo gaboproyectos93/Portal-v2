@@ -80,16 +80,11 @@ def cargar_directorio_correos():
 CATALOGO = cargar_catalogo_vehiculos()
 DF_PRECIOS = cargar_matriz_precios_maestra()
 
-# Mapeo a las columnas en minúsculas de tu nuevo CSV
 MAPEO_TARIFAS = {
-    "SSAS (Servicio Salud)": "costo_ssas",
-    "SAMU": "costo_ssas",
-    "Hospital Temuco": "costo_hosp_temuco",
-    "Hospital Villarrica": "costo_hosp_villarrica",
-    "Hospital Lautaro": "costo_hosp_lautaro",
-    "Hospital Pitrufquen": "costo_hosp_pitrufquen",
-    "Gendarmería de Chile": "costo_gend",
-    "Cliente Particular": "costo_ssas"
+    "SSAS (Servicio Salud)": "costo_ssas", "SAMU": "costo_ssas",
+    "Hospital Temuco": "costo_hosp_temuco", "Hospital Villarrica": "costo_hosp_villarrica",
+    "Hospital Lautaro": "costo_hosp_lautaro", "Hospital Pitrufquen": "costo_hosp_pitrufquen",
+    "Gendarmería de Chile": "costo_gend", "Cliente Particular": "costo_ssas"
 }
 
 # ==========================================
@@ -258,6 +253,13 @@ def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, ite
 # ==========================================
 # 4. FUNCIONES DE BASE DE DATOS Y STORAGE
 # ==========================================
+def buscar_vehiculo_en_directorio(patente):
+    try:
+        res = supabase.table("directorio_vehiculos").select("*").ilike("patente", patente).execute()
+        if res.data: return res.data[0]
+    except: pass
+    return None
+
 def subir_pdf_a_storage(nombre_archivo, pdf_bytes):
     try:
         supabase.storage.from_("pdf_cotizaciones").upload(path=nombre_archivo, file=pdf_bytes, file_options={"content-type": "application/pdf"})
@@ -336,23 +338,57 @@ with st.sidebar:
         st.rerun()
 
 # ==========================================
-# 6. VISTA DE PLANIFICACIÓN (GABO)
+# 6. VISTA DE PLANIFICACIÓN (GABO) CON INTELIGENCIA
 # ==========================================
 if st.session_state.usuario == "Gabo":
     st.title("🎛️ Consola de Planificación Operativa (Gabo)")
     
+    # Inicializar variables en caché para el autocompletado
+    if 'g_origen' not in st.session_state: st.session_state.g_origen = "Kaufmann"
+    if 'g_dest' not in st.session_state: st.session_state.g_dest = "SSAS (Servicio Salud)"
+    if 'g_nom' not in st.session_state: st.session_state.g_nom = "Gabriel Poblete"
+    if 'g_tel' not in st.session_state: st.session_state.g_tel = ""
+    if 'g_cor' not in st.session_state: st.session_state.g_cor = ""
+
     with st.expander("➕ Levantar Requerimiento para Taller", expanded=True):
-        f1, f2, f3 = st.columns(3)
-        pat = f1.text_input("Patente Vehículo (Opcional)").upper()
-        origen = f2.selectbox("Canal Comercial (Quién Factura)", ["Kaufmann", "Propio Cristian"])
-        dest_inst = f3.selectbox("Usuario Final / Destino Operativo", ["SSAS (Servicio Salud)", "SAMU", "Hospital Temuco", "Hospital Villarrica", "Gendarmería de Chile", "Cliente Particular"])
+        f1, f2, f3 = st.columns([1.5, 2, 1.5])
+        
+        # EL BUSCADOR INTELIGENTE
+        c_pat_a, c_pat_b = f1.columns([3, 1])
+        pat = c_pat_a.text_input("Patente Vehículo").upper()
+        if c_pat_b.button("🔍"):
+            datos_vehiculo = buscar_vehiculo_en_directorio(pat)
+            if datos_vehiculo:
+                st.session_state.g_origen = datos_vehiculo.get('origen_cliente', 'Kaufmann')
+                st.session_state.g_dest = datos_vehiculo.get('tipo_cliente', 'SSAS (Servicio Salud)')
+                st.session_state.g_nom = datos_vehiculo.get('nombre_contacto', 'Gabriel Poblete')
+                st.session_state.g_tel = datos_vehiculo.get('telefono', '')
+                st.session_state.g_cor = datos_vehiculo.get('correo', '')
+                st.toast("✅ Datos encontrados en el historial.")
+            else:
+                st.toast("⚠️ Vehículo no encontrado.", icon="🆕")
+            st.rerun()
+
+        ops_origen = ["Kaufmann", "Propio Cristian"]
+        idx_origen = ops_origen.index(st.session_state.g_origen) if st.session_state.g_origen in ops_origen else 0
+        origen = f2.selectbox("Canal Comercial (Quién Factura)", ops_origen, index=idx_origen)
+        
+        ops_inst = ["SSAS (Servicio Salud)", "SAMU", "Hospital Temuco", "Hospital Villarrica", "Hospital Lautaro", "Hospital Pitrufquen", "Gendarmería de Chile", "Cliente Particular"]
+        idx_inst = ops_inst.index(st.session_state.g_dest) if st.session_state.g_dest in ops_inst else 0
+        dest_inst = f3.selectbox("Usuario Final / Destino Operativo", ops_inst, index=idx_inst)
         
         st.markdown("**📋 Datos de Contacto de quien gestiona la orden:**")
         c1, c2, c3 = st.columns(3)
-        cont_nom = c1.text_input("Nombre de Contacto", value="Gabriel Poblete" if origen == "Kaufmann" else "")
-        cont_tel = c2.text_input("Teléfono de Contacto")
-        cont_cor = c3.text_input("Correo de Contacto")
+        cont_nom = c1.text_input("Nombre de Contacto", value=st.session_state.g_nom)
+        cont_tel = c2.text_input("Teléfono de Contacto", value=st.session_state.g_tel)
         
+        # AUTOCOMPLETAR CORREO DESDE EL DIRECTORIO
+        correo_sugerido = st.session_state.g_cor
+        if not correo_sugerido:
+            dir_c = cargar_directorio_correos()
+            if cont_nom in dir_c: correo_sugerido = dir_c[cont_nom]
+            
+        cont_cor = c3.text_input("Correo de Contacto", value=correo_sugerido)
         desc = st.text_area("Instrucciones Específicas / Diagnóstico")
         
         if st.button("Enviar Requerimiento al Taller", type="primary"):
@@ -374,7 +410,6 @@ if st.session_state.usuario == "Gabo":
 # 7. VISTA OPERATIVA INTEGRADA (CRISTIAN)
 # ==========================================
 elif st.session_state.usuario == "Cristian":
-    
     if st.session_state.vista_taller == "Bandeja":
         st.title("📥 Requerimientos Asignados")
         df_todo = extraer_historial_completo()
@@ -414,7 +449,6 @@ elif st.session_state.usuario == "Cristian":
             sol_id = st.session_state.get('sol_activa')
             
             st.title("📝 Configuración de Precios y Formulario")
-            
             origen_sel = st.selectbox("Canal / Origen del Trabajo", ["Kaufmann", "Propio Cristian"], index=0 if st.session_state.get('origen_inyectado') == "Kaufmann" else 1)
             
             cf1, cf2 = st.columns(2)
@@ -422,8 +456,15 @@ elif st.session_state.usuario == "Cristian":
             cli_fac = cf1.text_input("Señor(es) (Facturación / Cliente Principal)", value=cliente_default)
             rut_fac = cf2.text_input("RUT de Facturación")
             
+            # Autocompletado del Destino para Cristian
+            destino_sugerido = "SSAS (Servicio Salud)"
+            if p_in:
+                datos_v = buscar_vehiculo_en_directorio(p_in)
+                if datos_v and datos_v.get('tipo_cliente'): destino_sugerido = datos_v.get('tipo_cliente')
+
             ops_inst = ["SSAS (Servicio Salud)", "SAMU", "Hospital Temuco", "Hospital Villarrica", "Hospital Lautaro", "Hospital Pitrufquen", "Gendarmería de Chile", "Cliente Particular"]
-            us_final = st.selectbox("Usuario Final (Institución Destino del Vehículo)", ops_inst)
+            idx_inst_c = ops_inst.index(destino_sugerido) if destino_sugerido in ops_inst else 0
+            us_final = st.selectbox("Usuario Final (Institución Destino del Vehículo)", ops_inst, index=idx_inst_c)
             
             cv1, cv2 = st.columns(2)
             marca_sel = cv1.selectbox("Marca", list(CATALOGO.keys()))
@@ -431,32 +472,23 @@ elif st.session_state.usuario == "Cristian":
             modelo_sel = cv2.selectbox("Modelo", mod_disp)
             
             st.markdown("---")
-            
             st.subheader("🛠️ Selección de Trabajos con Tarifa Base Inteligente")
             
-            # MATRIZ DINÁMICA CONECTADA A SUPABASE
             col_tarifa_a_buscar = MAPEO_TARIFAS.get(us_final, "costo_ssas")
             
             if not DF_PRECIOS.empty and 'categoria' in DF_PRECIOS.columns:
                 cat_disponibles = sorted(DF_PRECIOS['categoria'].dropna().unique().tolist())
                 cat_sel = st.selectbox("1. Selecciona la Categoría de Trabajo", ["---"] + cat_disponibles)
-                
                 if cat_sel != "---":
                     trabajos_filtrados = DF_PRECIOS[DF_PRECIOS['categoria'] == cat_sel]
                     trabajo_sel = st.selectbox("2. Selecciona el Trabajo Específico", ["---"] + trabajos_filtrados['trabajo'].tolist())
-                    
                     if trabajo_sel != "---":
                         fila_precio = trabajos_filtrados[trabajos_filtrados['trabajo'] == trabajo_sel].iloc[0]
                         precio_base_sugerido = int(fila_precio[col_tarifa_a_buscar])
-                        
                         st.success(f"💰 Precio base indexado para {us_final}: **{format_clp(precio_base_sugerido)}**")
-                        
                         if st.button("➕ Cargar este Trabajo al Presupuesto"):
                             if 'lista_particular' not in st.session_state: st.session_state.lista_particular = []
-                            st.session_state.lista_particular.append({
-                                "Descripción": trabajo_sel, "Cantidad": 1, 
-                                "Unitario_Costo": precio_base_sugerido, "Total_Costo": precio_base_sugerido
-                            })
+                            st.session_state.lista_particular.append({"Descripción": trabajo_sel, "Cantidad": 1, "Unitario_Costo": precio_base_sugerido, "Total_Costo": precio_base_sugerido})
                             st.rerun()
 
             st.markdown("---")
@@ -472,7 +504,6 @@ elif st.session_state.usuario == "Cristian":
                         if 'lista_particular' not in st.session_state: st.session_state.lista_particular = []
                         st.session_state.lista_particular.append({"Descripción": dm, "Cantidad": 1, "Unitario_Costo": pm, "Total_Costo": pm})
                         st.rerun()
-                        
                 if 'lista_particular' in st.session_state:
                     for idx, i in enumerate(st.session_state.lista_particular):
                         ca, cb = st.columns([6, 1], vertical_alignment="center")
@@ -496,7 +527,6 @@ elif st.session_state.usuario == "Cristian":
                         if 'lista_repuestos' not in st.session_state: st.session_state.lista_repuestos = []
                         st.session_state.lista_repuestos.append({"Descripción": d_rep, "Cantidad": q_rep, "Unitario_Costo": float(p_final), "Total_Costo": float(p_final * q_rep)})
                         st.rerun()
-                        
                 if 'lista_repuestos' in st.session_state:
                     for idx, i in enumerate(st.session_state.lista_repuestos):
                         ca, cb = st.columns([6, 1], vertical_alignment="center")
