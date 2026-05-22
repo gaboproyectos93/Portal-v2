@@ -266,19 +266,21 @@ def subir_pdf_a_storage(nombre_archivo, pdf_bytes):
         return supabase.storage.from_("pdf_cotizaciones").get_public_url(nombre_archivo)
     except: return None
 
-def registrar_solicitud_gabo(patente, contacto, telefono, correo, origen, destino_institucion, descripcion):
+def registrar_solicitud_gabo(patente, contacto, telefono, correo, origen, usuario_final, tarifa, descripcion):
     try:
         if patente:
             supabase.table("directorio_vehiculos").upsert({
                 "patente": patente, "nombre_contacto": contacto, 
                 "telefono": telefono, "correo": correo, 
-                "origen_cliente": origen, "tipo_cliente": destino_institucion
+                "origen_cliente": origen, "cliente_final": usuario_final, "tipo_cliente": tarifa
             }).execute()
         
         supabase.table("historial_trabajos").insert({
             "patente": patente if patente else None,
-            "nombre_cliente_manual": contacto, 
             "origen_trabajo": origen,
+            "usuario_final": usuario_final,
+            "tarifa_aplicada": tarifa,
+            "contacto_gestion": contacto,
             "descripcion_requerimiento": descripcion,
             "estado": "Requerido",
             "creado_por": "Gabo"
@@ -317,7 +319,6 @@ if st.session_state.usuario is None:
             else: st.error("Credenciales Inválidas.")
     st.stop()
 
-# --- BARRA LATERAL GLOBAL Y BOTÓN DE CERRAR SESIÓN ---
 with st.sidebar:
     st.markdown(f"👤 Conectado: **{st.session_state.usuario}**")
     st.markdown("---")
@@ -338,73 +339,77 @@ with st.sidebar:
         st.rerun()
 
 # ==========================================
-# 6. VISTA DE PLANIFICACIÓN (GABO) CON INTELIGENCIA
+# 6. VISTA DE PLANIFICACIÓN (GABO) 
 # ==========================================
 if st.session_state.usuario == "Gabo":
     st.title("🎛️ Consola de Planificación Operativa (Gabo)")
     
-    # Inicializar variables en caché para el autocompletado
     if 'g_origen' not in st.session_state: st.session_state.g_origen = "Kaufmann"
-    if 'g_dest' not in st.session_state: st.session_state.g_dest = "SSAS (Servicio Salud)"
+    if 'g_dest_txt' not in st.session_state: st.session_state.g_dest_txt = ""
+    if 'g_tarifa' not in st.session_state: st.session_state.g_tarifa = "SSAS (Servicio Salud)"
     if 'g_nom' not in st.session_state: st.session_state.g_nom = "Gabriel Poblete"
     if 'g_tel' not in st.session_state: st.session_state.g_tel = ""
     if 'g_cor' not in st.session_state: st.session_state.g_cor = ""
 
     with st.expander("➕ Levantar Requerimiento para Taller", expanded=True):
-        f1, f2, f3 = st.columns([1.5, 2, 1.5])
-        
-        # EL BUSCADOR INTELIGENTE
-        c_pat_a, c_pat_b = f1.columns([3, 1])
+        f1, f2 = st.columns([1, 1])
+        c_pat_a, c_pat_b = f1.columns([4, 1])
         pat = c_pat_a.text_input("Patente Vehículo").upper()
-        if c_pat_b.button("🔍"):
-            datos_vehiculo = buscar_vehiculo_en_directorio(pat)
-            if datos_vehiculo:
-                st.session_state.g_origen = datos_vehiculo.get('origen_cliente', 'Kaufmann')
-                st.session_state.g_dest = datos_vehiculo.get('tipo_cliente', 'SSAS (Servicio Salud)')
-                st.session_state.g_nom = datos_vehiculo.get('nombre_contacto', 'Gabriel Poblete')
-                st.session_state.g_tel = datos_vehiculo.get('telefono', '')
-                st.session_state.g_cor = datos_vehiculo.get('correo', '')
-                st.toast("✅ Datos encontrados en el historial.")
-            else:
-                st.toast("⚠️ Vehículo no encontrado.", icon="🆕")
+        if c_pat_b.button("🔍 Buscar"):
+            datos_v = buscar_vehiculo_en_directorio(pat)
+            if datos_v:
+                st.session_state.g_origen = datos_v.get('origen_cliente', 'Kaufmann')
+                st.session_state.g_dest_txt = datos_v.get('cliente_final', '')
+                st.session_state.g_tarifa = datos_v.get('tipo_cliente', 'SSAS (Servicio Salud)')
+                st.session_state.g_nom = datos_v.get('nombre_contacto', 'Gabriel Poblete')
+                st.session_state.g_tel = datos_v.get('telefono', '')
+                st.session_state.g_cor = datos_v.get('correo', '')
+                st.toast("✅ Vehículo encontrado.")
+            else: st.toast("⚠️ Vehículo nuevo.", icon="🆕")
             st.rerun()
 
         ops_origen = ["Kaufmann", "Propio Cristian"]
         idx_origen = ops_origen.index(st.session_state.g_origen) if st.session_state.g_origen in ops_origen else 0
         origen = f2.selectbox("Canal Comercial (Quién Factura)", ops_origen, index=idx_origen)
         
-        ops_inst = ["SSAS (Servicio Salud)", "SAMU", "Hospital Temuco", "Hospital Villarrica", "Hospital Lautaro", "Hospital Pitrufquen", "Gendarmería de Chile", "Cliente Particular"]
-        idx_inst = ops_inst.index(st.session_state.g_dest) if st.session_state.g_dest in ops_inst else 0
-        dest_inst = f3.selectbox("Usuario Final / Destino Operativo", ops_inst, index=idx_inst)
+        st.markdown("---")
+        # LA SEPARACIÓN DE CONCEPTOS: Texto para el PDF vs Fórmula Matemática
+        d1, d2 = st.columns(2)
+        dest_inst = d1.text_input("Destino Operativo / Usuario Final (Texto para el PDF)", value=st.session_state.g_dest_txt, placeholder="Ej: Hospital Toltén")
         
+        ops_tarifas = ["SSAS (Servicio Salud)", "SAMU", "Hospital Temuco", "Hospital Villarrica", "Hospital Lautaro", "Hospital Pitrufquen", "Gendarmería de Chile", "Cliente Particular"]
+        idx_tarifa = ops_tarifas.index(st.session_state.g_tarifa) if st.session_state.g_tarifa in ops_tarifas else 0
+        tarifa_aplicada = d2.selectbox("Tarifa Base a Aplicar (Fórmula Matemática)", ops_tarifas, index=idx_tarifa)
+        
+        st.markdown("---")
         st.markdown("**📋 Datos de Contacto de quien gestiona la orden:**")
         c1, c2, c3 = st.columns(3)
         cont_nom = c1.text_input("Nombre de Contacto", value=st.session_state.g_nom)
         cont_tel = c2.text_input("Teléfono de Contacto", value=st.session_state.g_tel)
         
-        # AUTOCOMPLETAR CORREO DESDE EL DIRECTORIO
-        correo_sugerido = st.session_state.g_cor
-        if not correo_sugerido:
+        correo_sug = st.session_state.g_cor
+        if not correo_sug:
             dir_c = cargar_directorio_correos()
-            if cont_nom in dir_c: correo_sugerido = dir_c[cont_nom]
-            
-        cont_cor = c3.text_input("Correo de Contacto", value=correo_sugerido)
+            if cont_nom in dir_c: correo_sug = dir_c[cont_nom]
+        cont_cor = c3.text_input("Correo de Contacto", value=correo_sug)
+        
         desc = st.text_area("Instrucciones Específicas / Diagnóstico")
         
         if st.button("Enviar Requerimiento al Taller", type="primary"):
             if cont_nom and desc:
-                if registrar_solicitud_gabo(pat, cont_nom, cont_tel, cont_cor, origen, dest_inst, desc):
-                    st.success("🚀 Requerimiento asignado exitosamente en la bandeja de Cristian.")
+                if registrar_solicitud_gabo(pat, cont_nom, cont_tel, cont_cor, origen, dest_inst, tarifa_aplicada, desc):
+                    st.success("🚀 Requerimiento asignado exitosamente.")
                     time.sleep(1.2)
                     st.rerun()
-            else: st.warning("Rellena el nombre del contacto y la descripción.")
+            else: st.warning("Faltan datos por llenar.")
 
     st.markdown("---")
-    st.subheader("📊 Panel de Trazabilidad Global")
+    st.subheader("📊 Panel de Trazabilidad")
     df_global = extraer_historial_completo()
     if not df_global.empty:
-        df_global = df_global.reindex(columns=['id_cotizacion', 'patente', 'nombre_cliente_manual', 'origen_trabajo', 'estado', 'total_clp', 'pdf_url'])
-        st.dataframe(df_global, use_container_width=True)
+        col_list = ['id_cotizacion', 'patente', 'usuario_final', 'tarifa_aplicada', 'estado', 'total_clp', 'pdf_url']
+        exist_cols = [c for c in col_list if c in df_global.columns]
+        st.dataframe(df_global[exist_cols], use_container_width=True)
 
 # ==========================================
 # 7. VISTA OPERATIVA INTEGRADA (CRISTIAN)
@@ -419,9 +424,9 @@ elif st.session_state.usuario == "Cristian":
                 for idx, fila in df_req.iterrows():
                     st.markdown(f"""
                     <div class="card-requerido">
-                        <h4>📋 Orden N° {fila['id_cotizacion']} | Origen: {fila['origen_trabajo']} | Identificación: {fila['patente'] if pd.notna(fila['patente']) and fila['patente'] else 'S/P'}</h4>
-                        <p><strong>Instrucciones de Planificación:</strong> {fila['descripcion_requerimiento']}</p>
-                        <p><small>Contacto de Gestión: {fila['nombre_cliente_manual']}</small></p>
+                        <h4>📋 Orden N° {fila['id_cotizacion']} | Patente: {fila['patente'] if pd.notna(fila['patente']) and fila['patente'] else 'S/P'} | Destino: {fila.get('usuario_final', '')}</h4>
+                        <p><strong>Instrucciones:</strong> {fila['descripcion_requerimiento']}</p>
+                        <p><small>Solicita: {fila.get('contacto_gestion', '')} | Tarifa: {fila.get('tarifa_aplicada', '')}</small></p>
                     </div>
                     """, unsafe_allow_html=True)
                     
@@ -429,6 +434,8 @@ elif st.session_state.usuario == "Cristian":
                         st.session_state.sol_activa = fila['id_cotizacion']
                         st.session_state.patente_confirmada = fila['patente'] if pd.notna(fila['patente']) else ""
                         st.session_state.origen_inyectado = fila['origen_trabajo']
+                        st.session_state.usuario_final_inyectado = fila.get('usuario_final', '')
+                        st.session_state.tarifa_inyectada = fila.get('tarifa_aplicada', 'SSAS (Servicio Salud)')
                         st.session_state.vista_taller = "Cotizador"
                         st.session_state.paso_actual = 2
                         st.rerun()
@@ -453,18 +460,11 @@ elif st.session_state.usuario == "Cristian":
             
             cf1, cf2 = st.columns(2)
             cliente_default = "KAUFMANN S.A." if origen_sel == "Kaufmann" else ""
-            cli_fac = cf1.text_input("Señor(es) (Facturación / Cliente Principal)", value=cliente_default)
+            cli_fac = cf1.text_input("Señor(es) (Facturación)", value=cliente_default)
             rut_fac = cf2.text_input("RUT de Facturación")
             
-            # Autocompletado del Destino para Cristian
-            destino_sugerido = "SSAS (Servicio Salud)"
-            if p_in:
-                datos_v = buscar_vehiculo_en_directorio(p_in)
-                if datos_v and datos_v.get('tipo_cliente'): destino_sugerido = datos_v.get('tipo_cliente')
-
-            ops_inst = ["SSAS (Servicio Salud)", "SAMU", "Hospital Temuco", "Hospital Villarrica", "Hospital Lautaro", "Hospital Pitrufquen", "Gendarmería de Chile", "Cliente Particular"]
-            idx_inst_c = ops_inst.index(destino_sugerido) if destino_sugerido in ops_inst else 0
-            us_final = st.selectbox("Usuario Final (Institución Destino del Vehículo)", ops_inst, index=idx_inst_c)
+            # EL TEXTO QUE IRÁ AL PDF (HOSPITAL TOLTÉN)
+            us_final_pdf = st.text_input("Usuario Final / Destino (Texto para el PDF)", value=st.session_state.get('usuario_final_inyectado', ''))
             
             cv1, cv2 = st.columns(2)
             marca_sel = cv1.selectbox("Marca", list(CATALOGO.keys()))
@@ -472,21 +472,26 @@ elif st.session_state.usuario == "Cristian":
             modelo_sel = cv2.selectbox("Modelo", mod_disp)
             
             st.markdown("---")
-            st.subheader("🛠️ Selección de Trabajos con Tarifa Base Inteligente")
+            st.subheader("🛠️ Selección de Trabajos con Tarifa Inteligente")
             
-            col_tarifa_a_buscar = MAPEO_TARIFAS.get(us_final, "costo_ssas")
+            # LA FÓRMULA MATEMÁTICA QUE RIGE LOS PRECIOS
+            ops_tarifas = ["SSAS (Servicio Salud)", "SAMU", "Hospital Temuco", "Hospital Villarrica", "Hospital Lautaro", "Hospital Pitrufquen", "Gendarmería de Chile", "Cliente Particular"]
+            idx_t = ops_tarifas.index(st.session_state.get('tarifa_inyectada', 'SSAS (Servicio Salud)')) if st.session_state.get('tarifa_inyectada') in ops_tarifas else 0
+            tarifa_calculadora = st.selectbox("Tarifa Base a Aplicar (Cobro)", ops_tarifas, index=idx_t)
+
+            col_tarifa_a_buscar = MAPEO_TARIFAS.get(tarifa_calculadora, "costo_ssas")
             
             if not DF_PRECIOS.empty and 'categoria' in DF_PRECIOS.columns:
                 cat_disponibles = sorted(DF_PRECIOS['categoria'].dropna().unique().tolist())
-                cat_sel = st.selectbox("1. Selecciona la Categoría de Trabajo", ["---"] + cat_disponibles)
+                cat_sel = st.selectbox("1. Selecciona la Categoría", ["---"] + cat_disponibles)
                 if cat_sel != "---":
                     trabajos_filtrados = DF_PRECIOS[DF_PRECIOS['categoria'] == cat_sel]
-                    trabajo_sel = st.selectbox("2. Selecciona el Trabajo Específico", ["---"] + trabajos_filtrados['trabajo'].tolist())
+                    trabajo_sel = st.selectbox("2. Selecciona el Trabajo", ["---"] + trabajos_filtrados['trabajo'].tolist())
                     if trabajo_sel != "---":
                         fila_precio = trabajos_filtrados[trabajos_filtrados['trabajo'] == trabajo_sel].iloc[0]
                         precio_base_sugerido = int(fila_precio[col_tarifa_a_buscar])
-                        st.success(f"💰 Precio base indexado para {us_final}: **{format_clp(precio_base_sugerido)}**")
-                        if st.button("➕ Cargar este Trabajo al Presupuesto"):
+                        st.success(f"💰 Precio indexado según {tarifa_calculadora}: **{format_clp(precio_base_sugerido)}**")
+                        if st.button("➕ Cargar este Trabajo"):
                             if 'lista_particular' not in st.session_state: st.session_state.lista_particular = []
                             st.session_state.lista_particular.append({"Descripción": trabajo_sel, "Cantidad": 1, "Unitario_Costo": precio_base_sugerido, "Total_Costo": precio_base_sugerido})
                             st.rerun()
@@ -553,14 +558,21 @@ elif st.session_state.usuario == "Cristian":
                         try:
                             if sol_id:
                                 corr_id = str(sol_id)
-                                pdf_b = generar_pdf_oficial(p_in, marca_sel, modelo_sel, cli_fac, rut_fac, sel_final, tn, False, est, us_final, obs, corr_id)
+                                pdf_b = generar_pdf_oficial(p_in, marca_sel, modelo_sel, cli_fac, rut_fac, sel_final, tn, False, est, us_final_pdf, obs, corr_id)
                                 n_pdf = f"Presupuesto_{corr_id}.pdf"
                                 url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
-                                supabase.table("historial_trabajos").update({"estado": "Generado", "total_clp": tf, "pdf_url": url_doc, "origen_trabajo": origen_sel, "nombre_cliente_manual": cli_fac}).eq("id_cotizacion", sol_id).execute()
+                                supabase.table("historial_trabajos").update({
+                                    "estado": "Generado", "total_clp": tf, "pdf_url": url_doc, 
+                                    "origen_trabajo": origen_sel, "usuario_final": us_final_pdf, "tarifa_aplicada": tarifa_calculadora
+                                }).eq("id_cotizacion", sol_id).execute()
                             else:
-                                res = supabase.table("historial_trabajos").insert({"patente": p_in if p_in else None, "nombre_cliente_manual": cli_fac, "origen_trabajo": origen_sel, "estado": "Generado", "total_clp": tf, "creado_por": "Cristian"}).execute()
+                                res = supabase.table("historial_trabajos").insert({
+                                    "patente": p_in if p_in else None, "origen_trabajo": origen_sel, 
+                                    "usuario_final": us_final_pdf, "tarifa_aplicada": tarifa_calculadora,
+                                    "estado": "Generado", "total_clp": tf, "creado_por": "Cristian"
+                                }).execute()
                                 corr_id = str(res.data[0]['id_cotizacion'])
-                                pdf_b = generar_pdf_oficial(p_in, marca_sel, modelo_sel, cli_fac, rut_fac, sel_final, tn, False, est, us_final, obs, corr_id)
+                                pdf_b = generar_pdf_oficial(p_in, marca_sel, modelo_sel, cli_fac, rut_fac, sel_final, tn, False, est, us_final_pdf, obs, corr_id)
                                 n_pdf = f"Presupuesto_{corr_id}.pdf"
                                 url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
                                 supabase.table("historial_trabajos").update({"pdf_url": url_doc}).eq("id_cotizacion", corr_id).execute()
@@ -570,30 +582,8 @@ elif st.session_state.usuario == "Cristian":
                         except Exception as e_gen: st.error(f"Error: {e_gen}")
                 else:
                     d = st.session_state['presupuesto_generado']
-                    st.success("✅ Documento Oficial guardado en la nube.")
+                    st.success("✅ Documento Oficial guardado.")
                     st.download_button("📥 DESCARGAR PDF", d['pdf'], d['nombre'], "application/pdf")
-                    
-                    st.markdown("---")
-                    st.subheader("📧 Enviar Correo al Cliente")
-                    dir_c = cargar_directorio_correos()
-                    d_sel = st.multiselect("Contactos Frecuentes:", options=list(dir_c.keys()), default=[])
-                    e_ad = st.text_input("Correos Adicionales (separados por coma):")
-                    e_as = st.text_input("Asunto:", value=f"{d['nombre'].replace('.pdf', '')} - C.H. Servicio Automotriz")
-                    e_ms = st.text_area("Mensaje:", value=f"Estimado(a),\n\nAdjunto enviamos el presupuesto solicitado para la patente {p_in}.\n\nSaludos cordiales.")
-                    
-                    if st.button("📤 Enviar Correo", type="primary"):
-                        lc = [dir_c[n] for n in d_sel]
-                        if e_ad: lc.extend([e.strip() for e in e_ad.split(',') if e.strip()])
-                        dfinal = ", ".join(lc)
-                        if dfinal:
-                            with st.spinner("Enviando..."):
-                                ex, m = enviar_correo(dfinal, e_as, e_ms, d['pdf'], d['nombre'], EMAIL_SISTEMA)
-                            if ex:
-                                supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", sol_id if sol_id else d['nombre'].split('_')[1].replace('.pdf','')).execute()
-                                st.success("✅ Enviado exitosamente.")
-                            else: st.error(f"❌ {m}")
-                        else: st.warning("Ingresa un destinatario.")
-                    
                     if st.button("🔄 Finalizar y Cerrar Ciclo"):
                         for k in ['lista_particular', 'lista_repuestos', 'presupuesto_generado', 'sol_activa']:
                             if k in st.session_state: del st.session_state[k]
@@ -601,17 +591,17 @@ elif st.session_state.usuario == "Cristian":
                         st.rerun()
 
     elif st.session_state.vista_taller == "Historial":
-        st.title("🗃️ Registro y Correos")
+        st.title("🗃️ Registro General")
         df_todo = extraer_historial_completo()
         if not df_todo.empty:
-            lupa = st.text_input("🔍 Buscar por Patente o Cliente...").upper()
-            if lupa: df_todo = df_todo[df_todo['patente'].str.contains(lupa, na=False) | df_todo['nombre_cliente_manual'].str.contains(lupa, na=False, case=False)]
+            lupa = st.text_input("🔍 Buscar por Patente...").upper()
+            if lupa: df_todo = df_todo[df_todo['patente'].str.contains(lupa, na=False)]
             
-            t1, t2, t3 = st.tabs(["🟡 Por Enviar", "🔵 Enviados", "🟢 Realizados / Cerrados"])
+            t1, t2, t3 = st.tabs(["🟡 Por Enviar", "🔵 Enviados", "🟢 Aprobados/Cerrados"])
             with t1:
                 for idx, r in df_todo[df_todo['estado'] == 'Generado'].iterrows():
                     ca, cb, cc = st.columns([4, 1.5, 1])
-                    ca.write(f"📄 N° {r['id_cotizacion']} | Patente: {r['patente']} | Cuenta: {r['nombre_cliente_manual']} | Total: ${r['total_clp']:,.0f}")
+                    ca.write(f"📄 N° {r['id_cotizacion']} | Patente: {r['patente']} | Total: ${r['total_clp']:,.0f}")
                     if pd.notna(r.get('pdf_url')): cb.markdown(f"[👁️ Ver Documento]({r['pdf_url']})")
                     if cc.button("✉️ Marcar Enviado", key=f"e_{r['id_cotizacion']}"):
                         supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
@@ -619,11 +609,13 @@ elif st.session_state.usuario == "Cristian":
             with t2:
                 for idx, r in df_todo[df_todo['estado'] == 'Enviado'].iterrows():
                     ca, cb, cc = st.columns([4, 1.5, 1])
-                    ca.write(f"🔵 N° {r['id_cotizacion']} | Patente: {r['patente']} | Cuenta: {r['nombre_cliente_manual']} | Total: ${r['total_clp']:,.0f}")
+                    ca.write(f"🔵 N° {r['id_cotizacion']} | Patente: {r['patente']} | Total: ${r['total_clp']:,.0f}")
                     if pd.notna(r.get('pdf_url')): cb.markdown(f"[📥 Descargar]({r['pdf_url']})")
                     if cc.button("🟢 Aprobar", key=f"a_{r['id_cotizacion']}"):
                         supabase.table("historial_trabajos").update({"estado": "Aprobado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
                         st.rerun()
             with t3:
                 df_fin = df_todo[df_todo['estado'].isin(['Aprobado', 'Terminado'])]
-                if not df_fin.empty: st.dataframe(df_fin[['id_cotizacion', 'patente', 'nombre_cliente_manual', 'estado', 'total_clp', 'pdf_url']], use_container_width=True)
+                if not df_fin.empty: 
+                    exist_cols = [c for c in ['id_cotizacion', 'patente', 'usuario_final', 'estado', 'total_clp', 'pdf_url'] if c in df_fin.columns]
+                    st.dataframe(df_fin[exist_cols], use_container_width=True)
