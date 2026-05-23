@@ -38,6 +38,7 @@ st.markdown(f"""
     .stTabs [aria-selected='true'] {{ background-color: {COLOR_PRIMARIO} !important; color: white !important; font-weight: bold; border-radius: 4px; }}
     .stButton > button[kind='primary'] {{ background-color: {COLOR_PRIMARIO} !important; color: white !important; font-weight: bold; width: 100%; }}
     .card-requerido {{ background-color: #ffe6e6; padding: 15px; border-left: 5px solid #ff4d4d; border-radius: 4px; margin-bottom: 10px; }}
+    div[data-testid="stNumberInput"] input {{ max-width: 100px; text-align: center; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -363,7 +364,6 @@ if st.session_state.usuario == "Gabo":
                 st.session_state.g_dest_txt = datos_v.get('cliente_final') if datos_v.get('cliente_final') else ''
                 st.session_state.g_tarifa = datos_v.get('tipo_cliente') if datos_v.get('tipo_cliente') else 'SSAS (Servicio Salud)'
                 
-                # ESCUDO DE LIMPIEZA INTELIGENTE: Evitar que cargue el nombre del hospital como contacto
                 nom_bd = datos_v.get('nombre_contacto')
                 if not nom_bd or "hospital" in nom_bd.lower() or "samu" in nom_bd.lower() or "gendarmeria" in nom_bd.lower():
                     st.session_state.g_nom = 'Gabriel Poblete'
@@ -379,7 +379,7 @@ if st.session_state.usuario == "Gabo":
 
         ops_origen = ["Kaufmann", "Propio Cristian"]
         idx_origen = ops_origen.index(st.session_state.g_origen) if st.session_state.g_origen in ops_origen else 0
-        origen = f2.selectbox("Canal Comercial (Quién Factura)", ops_origen, index=idx_origen)
+        origen = f2.selectbox("Cliente / Quién Factura", ops_origen, index=idx_origen)
         
         st.markdown("---")
         d1, d2 = st.columns(2)
@@ -465,7 +465,9 @@ elif st.session_state.usuario == "Cristian":
             datos_v = buscar_vehiculo_en_directorio(p_in) if p_in else None
             
             st.title("📝 Configuración de Precios y Formulario")
-            origen_sel = st.selectbox("Canal / Origen del Trabajo", ["Kaufmann", "Propio Cristian"], index=0 if st.session_state.get('origen_inyectado') == "Kaufmann" else 1)
+            
+            # EL CAMBIO A "CLIENTE"
+            origen_sel = st.selectbox("Cliente", ["Kaufmann", "Propio Cristian"], index=0 if st.session_state.get('origen_inyectado') == "Kaufmann" else 1)
             
             cf1, cf2 = st.columns(2)
             cliente_default = "KAUFMANN S.A." if origen_sel == "Kaufmann" else datos_v.get('nombre_contacto', '') if datos_v else ""
@@ -492,7 +494,6 @@ elif st.session_state.usuario == "Cristian":
             st.subheader("🛠️ Selección de Trabajos con Tarifa Inteligente")
             
             ops_tarifas = ["SSAS (Servicio Salud)", "SAMU", "Hospital Temuco", "Hospital Villarrica", "Hospital Lautaro", "Hospital Pitrufquen", "Gendarmería de Chile", "Cliente Particular"]
-            
             tarifa_default = "SSAS (Servicio Salud)"
             if st.session_state.get('tarifa_inyectada'): tarifa_default = st.session_state.get('tarifa_inyectada')
             elif datos_v and datos_v.get('tipo_cliente'): tarifa_default = datos_v.get('tipo_cliente')
@@ -502,23 +503,42 @@ elif st.session_state.usuario == "Cristian":
 
             col_tarifa_a_buscar = MAPEO_TARIFAS.get(tarifa_calculadora, "costo_ssas")
             
+            sel_final = [] # Inicializamos la lista maestra de cobros aquí
+            
+            # EL CAMBIO A MÚLTIPLES PESTAÑAS (TABS) PARA LA LISTA DE PRECIOS
             if not DF_PRECIOS.empty and 'categoria' in DF_PRECIOS.columns:
                 cat_disponibles = sorted(DF_PRECIOS['categoria'].dropna().unique().tolist())
-                cat_sel = st.selectbox("1. Selecciona la Categoría", ["---"] + cat_disponibles)
-                if cat_sel != "---":
-                    trabajos_filtrados = DF_PRECIOS[DF_PRECIOS['categoria'] == cat_sel]
-                    trabajo_sel = st.selectbox("2. Selecciona el Trabajo", ["---"] + trabajos_filtrados['trabajo'].tolist())
-                    if trabajo_sel != "---":
-                        fila_precio = trabajos_filtrados[trabajos_filtrados['trabajo'] == trabajo_sel].iloc[0]
-                        precio_base_sugerido = int(fila_precio[col_tarifa_a_buscar])
-                        st.success(f"💰 Precio indexado según {tarifa_calculadora}: **{format_clp(precio_base_sugerido)}**")
-                        if st.button("➕ Cargar este Trabajo al Presupuesto"):
-                            if 'lista_particular' not in st.session_state: st.session_state.lista_particular = []
-                            st.session_state.lista_particular.append({"Descripción": trabajo_sel, "Cantidad": 1, "Unitario_Costo": precio_base_sugerido, "Total_Costo": precio_base_sugerido})
-                            st.rerun()
+                tabs_cat = st.tabs(cat_disponibles)
+                
+                for i, cat in enumerate(cat_disponibles):
+                    with tabs_cat[i]:
+                        df_cat = DF_PRECIOS[DF_PRECIOS['categoria'] == cat].copy()
+                        df_cat.loc[:, col_tarifa_a_buscar] = pd.to_numeric(df_cat[col_tarifa_a_buscar], errors='coerce').fillna(0)
+                        items_v = df_cat[df_cat[col_tarifa_a_buscar] > 0]
+                        
+                        if items_v.empty: 
+                            st.info("⚠️ Esta categoría no tiene precios configurados para la tarifa seleccionada.")
+                        else:
+                            for idx, row in items_v.iterrows():
+                                with st.container():
+                                    cc1, cc2, cc3 = st.columns([5.5, 1.5, 2], vertical_alignment="center")
+                                    cc1.markdown(f"**{row['trabajo']}**")
+                                    
+                                    k = f"q_{row['trabajo']}_{idx}"
+                                    qty = cc2.number_input("", 0, 20, value=st.session_state.get(k, 0), key=k, label_visibility="collapsed")
+                                    
+                                    p = float(row[col_tarifa_a_buscar])
+                                    cc3.markdown(f"**{format_clp(p)}**")
+                                    
+                                    if qty > 0: 
+                                        sel_final.append({
+                                            "Descripción": row['trabajo'], 
+                                            "Cantidad": qty, 
+                                            "Unitario_Costo": p, 
+                                            "Total_Costo": p * qty
+                                        })
 
             st.markdown("---")
-            sel_final = []
             tab_manual, tab_repuestos = st.tabs(["📝 Operaciones Manuales", "🛒 Repuestos"])
             
             with tab_manual:
@@ -535,7 +555,7 @@ elif st.session_state.usuario == "Cristian":
                         ca, cb = st.columns([6, 1], vertical_alignment="center")
                         ca.markdown(f"• {i['Descripción']} - **{format_clp(i['Total_Costo'])}**")
                         if cb.button("🗑️", key=f"dm_{idx}"): st.session_state.lista_particular.pop(idx); st.rerun()
-                    sel_final = st.session_state.lista_particular
+                    sel_final.extend(st.session_state.lista_particular)
 
             with tab_repuestos:
                 cx1, cx2 = st.columns([3, 1])
