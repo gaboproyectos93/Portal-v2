@@ -355,17 +355,26 @@ if st.session_state.usuario == "Gabo":
         f1, f2 = st.columns([1, 1])
         c_pat_a, c_pat_b = f1.columns([4, 1])
         pat = c_pat_a.text_input("Patente Vehículo").upper()
+        
         if c_pat_b.button("🔍 Buscar"):
             datos_v = buscar_vehiculo_en_directorio(pat)
             if datos_v:
-                st.session_state.g_origen = datos_v.get('origen_cliente', 'Kaufmann')
-                st.session_state.g_dest_txt = datos_v.get('cliente_final', '')
-                st.session_state.g_tarifa = datos_v.get('tipo_cliente', 'SSAS (Servicio Salud)')
-                st.session_state.g_nom = datos_v.get('nombre_contacto', 'Gabriel Poblete')
-                st.session_state.g_tel = datos_v.get('telefono', '')
-                st.session_state.g_cor = datos_v.get('correo', '')
-                st.toast("✅ Vehículo encontrado en la base de datos.")
-            else: st.toast("⚠️ Vehículo nuevo.", icon="🆕")
+                st.session_state.g_origen = datos_v.get('origen_cliente') if datos_v.get('origen_cliente') else 'Kaufmann'
+                st.session_state.g_dest_txt = datos_v.get('cliente_final') if datos_v.get('cliente_final') else ''
+                st.session_state.g_tarifa = datos_v.get('tipo_cliente') if datos_v.get('tipo_cliente') else 'SSAS (Servicio Salud)'
+                
+                # ESCUDO DE LIMPIEZA INTELIGENTE: Evitar que cargue el nombre del hospital como contacto
+                nom_bd = datos_v.get('nombre_contacto')
+                if not nom_bd or "hospital" in nom_bd.lower() or "samu" in nom_bd.lower() or "gendarmeria" in nom_bd.lower():
+                    st.session_state.g_nom = 'Gabriel Poblete'
+                else:
+                    st.session_state.g_nom = nom_bd
+                    
+                st.session_state.g_tel = datos_v.get('telefono') if datos_v.get('telefono') else ''
+                st.session_state.g_cor = datos_v.get('correo') if datos_v.get('correo') else ''
+                st.toast("✅ Vehículo encontrado y datos purgados.")
+            else: 
+                st.toast("⚠️ Vehículo nuevo.", icon="🆕")
             st.rerun()
 
         ops_origen = ["Kaufmann", "Propio Cristian"]
@@ -459,18 +468,16 @@ elif st.session_state.usuario == "Cristian":
             origen_sel = st.selectbox("Canal / Origen del Trabajo", ["Kaufmann", "Propio Cristian"], index=0 if st.session_state.get('origen_inyectado') == "Kaufmann" else 1)
             
             cf1, cf2 = st.columns(2)
-            # Lógica Autocompletado Facturación
             cliente_default = "KAUFMANN S.A." if origen_sel == "Kaufmann" else datos_v.get('nombre_contacto', '') if datos_v else ""
             rut_default = "92.475.000-6" if origen_sel == "Kaufmann" else datos_v.get('rut_facturacion', '') if datos_v else ""
             
             cli_fac = cf1.text_input("Señor(es) (Facturación)", value=cliente_default)
             rut_fac = cf2.text_input("RUT de Facturación", value=rut_default)
             
-            destino_default = st.session_state.get('usuario_final_inyectado', '') if st.session_state.get('usuario_final_inyectado') else datos_v.get('cliente_final', '') if datos_v else ''
+            destino_default = st.session_state.get('usuario_final_inyectado') if st.session_state.get('usuario_final_inyectado') else datos_v.get('cliente_final', '') if datos_v else ''
             us_final_pdf = st.text_input("Usuario Final / Destino (Texto para el PDF)", value=destino_default)
             
             cv1, cv2 = st.columns(2)
-            # Lógica Autocompletado Marca/Modelo leyendo de base_vehiculos
             marca_db = datos_v.get('marca') if datos_v else None
             idx_marca = list(CATALOGO.keys()).index(marca_db) if marca_db in CATALOGO else 0
             
@@ -486,7 +493,6 @@ elif st.session_state.usuario == "Cristian":
             
             ops_tarifas = ["SSAS (Servicio Salud)", "SAMU", "Hospital Temuco", "Hospital Villarrica", "Hospital Lautaro", "Hospital Pitrufquen", "Gendarmería de Chile", "Cliente Particular"]
             
-            # Determinamos qué tarifa precargar
             tarifa_default = "SSAS (Servicio Salud)"
             if st.session_state.get('tarifa_inyectada'): tarifa_default = st.session_state.get('tarifa_inyectada')
             elif datos_v and datos_v.get('tipo_cliente'): tarifa_default = datos_v.get('tipo_cliente')
@@ -571,14 +577,12 @@ elif st.session_state.usuario == "Cristian":
                 if 'presupuesto_generado' not in st.session_state:
                     if st.button("💾 GUARDAR ORDEN Y GENERAR DOCUMENTO", type="primary", use_container_width=True):
                         try:
-                            # 1. Actualizar Master de Vehículo con cualquier cambio manual que haya hecho Cristian
                             if p_in:
                                 supabase.table("directorio_vehiculos").upsert({
                                     "patente": p_in, "rut_facturacion": rut_fac, 
                                     "marca": marca_sel, "modelo": modelo_sel
                                 }).execute()
 
-                            # 2. Generación del PDF y BD
                             if sol_id:
                                 corr_id = str(sol_id)
                                 pdf_b = generar_pdf_oficial(p_in, marca_sel, modelo_sel, cli_fac, rut_fac, sel_final, tn, False, est, us_final_pdf, obs, corr_id)
