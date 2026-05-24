@@ -6,6 +6,7 @@ import time
 from fpdf import FPDF
 from datetime import datetime
 import smtplib
+import json
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
@@ -38,6 +39,7 @@ st.markdown(f"""
     .stTabs [aria-selected='true'] {{ background-color: {COLOR_PRIMARIO} !important; color: white !important; font-weight: bold; border-radius: 4px; }}
     .stButton > button[kind='primary'] {{ background-color: {COLOR_PRIMARIO} !important; color: white !important; font-weight: bold; width: 100%; }}
     .card-requerido {{ background-color: #ffe6e6; padding: 15px; border-left: 5px solid #ff4d4d; border-radius: 4px; margin-bottom: 10px; }}
+    .card-borrador {{ background-color: #e6f2ff; padding: 15px; border-left: 5px solid #0066cc; border-radius: 4px; margin-bottom: 15px; }}
     div[data-testid="stNumberInput"] input {{ max-width: 100px; text-align: center; }}
 </style>
 """, unsafe_allow_html=True)
@@ -89,7 +91,7 @@ MAPEO_TARIFAS = {
 }
 
 # ==========================================
-# 3. GENERADOR DE PDF Y CORREOS
+# 3. GENERADOR DE PDF Y UTILS
 # ==========================================
 def format_clp(v): 
     try: return f"${float(v):,.0f}".replace(",", ".")
@@ -252,7 +254,7 @@ def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, ite
     return pdf.output(dest='S').encode('latin-1') if isinstance(pdf.output(dest='S'), str) else bytes(pdf.output(dest='S'))
 
 # ==========================================
-# 4. FUNCIONES DE BASE DE DATOS Y STORAGE
+# 4. FUNCIONES DE BASE DE DATOS Y BORRADOR
 # ==========================================
 def buscar_vehiculo_en_directorio(patente):
     try:
@@ -278,17 +280,13 @@ def registrar_solicitud_gabo(patente, contacto, telefono, correo, origen, destin
         
         supabase.table("historial_trabajos").insert({
             "patente": patente if patente else None,
-            "origen_trabajo": origen,
-            "usuario_final": destino_txt,
-            "tarifa_aplicada": tarifa_math,
-            "contacto_gestion": contacto,
-            "descripcion_requerimiento": descripcion,
-            "estado": "Requerido",
-            "creado_por": "Gabo"
+            "origen_trabajo": origen, "usuario_final": destino_txt, "tarifa_aplicada": tarifa_math,
+            "contacto_gestion": contacto, "descripcion_requerimiento": descripcion,
+            "estado": "Requerido", "creado_por": "Gabo"
         }).execute()
         return True
     except Exception as e:
-        st.error(f"Error registrando en Supabase: {e}")
+        st.error(f"Error registrando: {e}")
         return False
 
 def extraer_historial_completo():
@@ -297,8 +295,46 @@ def extraer_historial_completo():
         return pd.DataFrame(res.data) if res.data else pd.DataFrame()
     except: return pd.DataFrame()
 
+def guardar_borrador():
+    if not supabase or st.session_state.usuario != "Cristian": return
+    datos = {
+        'sol_activa': st.session_state.get('sol_activa'),
+        'sub_paso': st.session_state.get('sub_paso', 1),
+        'c_patente': st.session_state.get('c_patente'),
+        'c_origen': st.session_state.get('c_origen'),
+        'c_cli_fac': st.session_state.get('c_cli_fac'),
+        'c_rut_fac': st.session_state.get('c_rut_fac'),
+        'c_us_final': st.session_state.get('c_us_final'),
+        'c_marca': st.session_state.get('c_marca'),
+        'c_modelo': st.session_state.get('c_modelo'),
+        'c_tarifa': st.session_state.get('c_tarifa'),
+        'lista_particular': st.session_state.get('lista_particular', []),
+        'lista_repuestos': st.session_state.get('lista_repuestos', [])
+    }
+    try: supabase.table("borradores_cotizacion").upsert({'id_usuario': 'Cristian', 'datos': datos}).execute()
+    except: pass
+
+def cargar_borrador():
+    if not supabase: return None
+    try:
+        res = supabase.table("borradores_cotizacion").select("datos").eq("id_usuario", "Cristian").execute()
+        if res.data: return res.data[0]['datos']
+    except: pass
+    return None
+
+def eliminar_borrador():
+    if not supabase: return
+    try: supabase.table("borradores_cotizacion").delete().eq("id_usuario", "Cristian").execute()
+    except: pass
+
+def limpiar_sesion_cristian():
+    claves_a_borrar = ['sol_activa', 'sub_paso', 'c_patente', 'c_origen', 'c_cli_fac', 'c_rut_fac', 'c_us_final', 'c_marca', 'c_modelo', 'c_tarifa', 'lista_particular', 'lista_repuestos', 'presupuesto_generado']
+    for k in claves_a_borrar:
+        if k in st.session_state: del st.session_state[k]
+    eliminar_borrador()
+
 # ==========================================
-# 5. CONTROL DE PERFILES DE ACCESO (GLOBAL)
+# 5. CONTROL DE PERFILES Y SESIÓN
 # ==========================================
 if 'usuario' not in st.session_state: st.session_state.usuario = None
 
@@ -315,7 +351,6 @@ if st.session_state.usuario is None:
             elif p_sel == "Christian Herrera (Taller)" and pass_in == "cristian2026":
                 st.session_state.usuario = "Cristian"
                 st.session_state.vista_taller = "Bandeja"
-                st.session_state.paso_actual = 1
                 st.rerun()
             else: st.error("Credenciales Inválidas.")
     st.stop()
@@ -325,14 +360,21 @@ with st.sidebar:
     st.markdown("---")
     
     if st.session_state.usuario == "Cristian":
-        if st.button("📥 Bandeja de Órdenes"): st.session_state.vista_taller = "Bandeja"; st.rerun()
-        if st.button("🚀 Cotización Libre"): 
-            st.session_state.vista_taller = "Cotizador"
-            st.session_state.paso_actual = 1
-            st.session_state.sol_activa = None
-            st.session_state.patente_confirmada = ""
+        if st.button("🏠 Inicio / Limpiar Todo", type="primary"): 
+            limpiar_sesion_cristian()
+            st.session_state.vista_taller = "Bandeja"
             st.rerun()
-        if st.button("🗂️ Historial General"): st.session_state.vista_taller = "Historial"; st.rerun()
+        if st.button("📥 Bandeja de Órdenes"): 
+            st.session_state.vista_taller = "Bandeja"
+            st.rerun()
+        if st.button("🚀 Nueva Cotización Libre"): 
+            limpiar_sesion_cristian()
+            st.session_state.vista_taller = "Cotizador"
+            st.session_state.sub_paso = 0 # Pantalla de pedir patente
+            st.rerun()
+        if st.button("🗂️ Historial General"): 
+            st.session_state.vista_taller = "Historial"
+            st.rerun()
         st.markdown("---")
         
     if st.button("🔒 Cerrar Sesión", use_container_width=True):
@@ -343,7 +385,7 @@ with st.sidebar:
 # 6. VISTA DE PLANIFICACIÓN (GABO) 
 # ==========================================
 if st.session_state.usuario == "Gabo":
-    st.title("🎛️ Consola de Planificación Operativa (Gabo)")
+    st.title("🎛️ Consola de Planificación (Gabo)")
     
     if 'g_origen' not in st.session_state: st.session_state.g_origen = "Kaufmann"
     if 'g_dest_txt' not in st.session_state: st.session_state.g_dest_txt = ""
@@ -360,21 +402,17 @@ if st.session_state.usuario == "Gabo":
         if c_pat_b.button("🔍 Buscar"):
             datos_v = buscar_vehiculo_en_directorio(pat)
             if datos_v:
-                st.session_state.g_origen = datos_v.get('origen_cliente') if datos_v.get('origen_cliente') else 'Kaufmann'
-                st.session_state.g_dest_txt = datos_v.get('cliente_final') if datos_v.get('cliente_final') else ''
-                st.session_state.g_tarifa = datos_v.get('tipo_cliente') if datos_v.get('tipo_cliente') else 'SSAS (Servicio Salud)'
-                
+                st.session_state.g_origen = datos_v.get('origen_cliente', 'Kaufmann')
+                st.session_state.g_dest_txt = datos_v.get('cliente_final', '')
+                st.session_state.g_tarifa = datos_v.get('tipo_cliente', 'SSAS (Servicio Salud)')
                 nom_bd = datos_v.get('nombre_contacto')
                 if not nom_bd or "hospital" in nom_bd.lower() or "samu" in nom_bd.lower() or "gendarmeria" in nom_bd.lower():
                     st.session_state.g_nom = 'Gabriel Poblete'
-                else:
-                    st.session_state.g_nom = nom_bd
-                    
-                st.session_state.g_tel = datos_v.get('telefono') if datos_v.get('telefono') else ''
-                st.session_state.g_cor = datos_v.get('correo') if datos_v.get('correo') else ''
-                st.toast("✅ Vehículo encontrado y datos purgados.")
-            else: 
-                st.toast("⚠️ Vehículo nuevo.", icon="🆕")
+                else: st.session_state.g_nom = nom_bd
+                st.session_state.g_tel = datos_v.get('telefono', '')
+                st.session_state.g_cor = datos_v.get('correo', '')
+                st.toast("✅ Vehículo encontrado.")
+            else: st.toast("⚠️ Vehículo nuevo.", icon="🆕")
             st.rerun()
 
         ops_origen = ["Kaufmann", "Propio Cristian"]
@@ -383,48 +421,78 @@ if st.session_state.usuario == "Gabo":
         
         st.markdown("---")
         d1, d2 = st.columns(2)
-        dest_inst = d1.text_input("Destino Operativo / Usuario Final (Texto impreso en PDF)", value=st.session_state.g_dest_txt, placeholder="Ej: Hospital Toltén")
-        
+        dest_inst = d1.text_input("Destino Operativo / Usuario Final (Texto impreso en PDF)", value=st.session_state.g_dest_txt)
         ops_tarifas = ["SSAS (Servicio Salud)", "SAMU", "Hospital Temuco", "Hospital Villarrica", "Hospital Lautaro", "Hospital Pitrufquen", "Gendarmería de Chile", "Cliente Particular"]
         idx_tarifa = ops_tarifas.index(st.session_state.g_tarifa) if st.session_state.g_tarifa in ops_tarifas else 0
-        tarifa_aplicada = d2.selectbox("Tarifa Base a Aplicar (Fórmula Interna de Precios)", ops_tarifas, index=idx_tarifa)
+        tarifa_aplicada = d2.selectbox("Tarifa Base a Aplicar (Fórmula de Precios)", ops_tarifas, index=idx_tarifa)
         
         st.markdown("---")
-        st.markdown("**📋 Datos de Contacto de quien gestiona la orden:**")
         c1, c2, c3 = st.columns(3)
         cont_nom = c1.text_input("Nombre de Contacto", value=st.session_state.g_nom)
-        cont_tel = c2.text_input("Teléfono de Contacto", value=st.session_state.g_tel)
-        
+        cont_tel = c2.text_input("Teléfono", value=st.session_state.g_tel)
         correo_sug = st.session_state.g_cor
         if not correo_sug:
             dir_c = cargar_directorio_correos()
             if cont_nom in dir_c: correo_sug = dir_c[cont_nom]
-        cont_cor = c3.text_input("Correo de Contacto", value=correo_sug)
+        cont_cor = c3.text_input("Correo", value=correo_sug)
         
-        desc = st.text_area("Instrucciones Específicas / Diagnóstico para Cristian")
-        
+        desc = st.text_area("Instrucciones Específicas para Cristian")
         if st.button("Enviar Requerimiento al Taller", type="primary"):
             if cont_nom and desc:
                 if registrar_solicitud_gabo(pat, cont_nom, cont_tel, cont_cor, origen, dest_inst, tarifa_aplicada, desc):
-                    st.success("🚀 Requerimiento asignado exitosamente en la bandeja del Taller.")
-                    time.sleep(1.2)
-                    st.rerun()
-            else: st.warning("Faltan datos por llenar (Contacto o Diagnóstico).")
+                    st.success("🚀 Asignado exitosamente.")
+                    time.sleep(1.2); st.rerun()
+            else: st.warning("Faltan datos.")
 
     st.markdown("---")
-    st.subheader("📊 Panel de Trazabilidad Activo")
+    st.subheader("✅ Autorización de Cotizaciones (Revisión Final)")
     df_global = extraer_historial_completo()
     if not df_global.empty:
-        col_list = ['id_cotizacion', 'patente', 'usuario_final', 'tarifa_aplicada', 'estado', 'total_clp', 'pdf_url']
-        exist_cols = [c for c in col_list if c in df_global.columns]
-        st.dataframe(df_global[exist_cols], use_container_width=True)
+        df_enviadas = df_global[df_global['estado'] == 'Enviado']
+        if not df_enviadas.empty:
+            for idx, r in df_enviadas.iterrows():
+                ca, cb, cc = st.columns([5, 1.5, 1.5])
+                ca.write(f"📄 N° {r['id_cotizacion']} | Patente: {r['patente']} | Total: ${r['total_clp']:,.0f}")
+                cb.markdown(f"[👁️ Ver Documento]({r['pdf_url']})")
+                if cc.button("✅ Aprobar Trabajo", key=f"apr_gb_{r['id_cotizacion']}", type="primary"):
+                    supabase.table("historial_trabajos").update({"estado": "Aprobado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
+                    st.success("Trabajo Aprobado."); time.sleep(1); st.rerun()
+        else: st.info("No hay cotizaciones pendientes de tu aprobación.")
+        
+        st.markdown("---")
+        st.subheader("📊 Trazabilidad Global")
+        col_list = ['id_cotizacion', 'patente', 'usuario_final', 'tarifa_aplicada', 'estado', 'total_clp']
+        st.dataframe(df_global[[c for c in col_list if c in df_global.columns]], use_container_width=True)
 
 # ==========================================
-# 7. VISTA OPERATIVA INTEGRADA (CRISTIAN)
+# 7. VISTA OPERATIVA INTEGRADA (CRISTIAN) - FLUJO WIZARD
 # ==========================================
 elif st.session_state.usuario == "Cristian":
+    
+    # Sistema de recuperación de Borrador
+    if 'borrador_check' not in st.session_state:
+        st.session_state.borrador_check = True
+        datos_recuperados = cargar_borrador()
+        if datos_recuperados and st.session_state.vista_taller == "Bandeja":
+            st.session_state.hay_borrador = datos_recuperados
+            
+    if st.session_state.get('hay_borrador'):
+        st.markdown(f"""<div class="card-borrador"><h4>⚠️ Tienes una cotización en pausa (Patente: {st.session_state.hay_borrador.get('c_patente', 'S/P')})</h4></div>""", unsafe_allow_html=True)
+        c_a, c_b = st.columns(2)
+        if c_a.button("✅ Recuperar Trabajo", use_container_width=True):
+            b = st.session_state.hay_borrador
+            for k, v in b.items(): st.session_state[k] = v
+            st.session_state.vista_taller = "Cotizador"
+            del st.session_state['hay_borrador']
+            st.rerun()
+        if c_b.button("🗑️ Descartar y Empezar de Cero", use_container_width=True):
+            eliminar_borrador()
+            del st.session_state['hay_borrador']
+            st.rerun()
+        st.markdown("---")
+
     if st.session_state.vista_taller == "Bandeja":
-        st.title("📥 Requerimientos Asignados")
+        st.title("📥 Bandeja de Entrada")
         df_todo = extraer_historial_completo()
         if not df_todo.empty and 'estado' in df_todo.columns:
             df_req = df_todo[df_todo['estado'] == 'Requerido']
@@ -432,159 +500,181 @@ elif st.session_state.usuario == "Cristian":
                 for idx, fila in df_req.iterrows():
                     st.markdown(f"""
                     <div class="card-requerido">
-                        <h4>📋 Orden N° {fila['id_cotizacion']} | Patente: {fila['patente'] if pd.notna(fila['patente']) and fila['patente'] else 'S/P'} | Destino: {fila.get('usuario_final', '')}</h4>
+                        <h4>📋 Orden N° {fila['id_cotizacion']} | Patente: {fila['patente'] if pd.notna(fila['patente']) else 'S/P'} | Destino: {fila.get('usuario_final', '')}</h4>
                         <p><strong>Instrucciones:</strong> {fila['descripcion_requerimiento']}</p>
-                        <p><small>Solicita: {fila.get('contacto_gestion', '')} | Tarifa a aplicar: {fila.get('tarifa_aplicada', '')}</small></p>
                     </div>
                     """, unsafe_allow_html=True)
-                    
                     if st.button(f"⚙️ Atender e Iniciar Cotización N° {fila['id_cotizacion']}", key=f"at_{fila['id_cotizacion']}", type="primary"):
+                        limpiar_sesion_cristian() # Amnesia de la sesión anterior
                         st.session_state.sol_activa = fila['id_cotizacion']
-                        st.session_state.patente_confirmada = fila['patente'] if pd.notna(fila['patente']) else ""
-                        st.session_state.origen_inyectado = fila['origen_trabajo']
-                        st.session_state.usuario_final_inyectado = fila.get('usuario_final', '')
-                        st.session_state.tarifa_inyectada = fila.get('tarifa_aplicada', 'SSAS (Servicio Salud)')
+                        st.session_state.c_patente = fila['patente'] if pd.notna(fila['patente']) else ""
+                        st.session_state.c_origen = fila['origen_trabajo']
+                        st.session_state.c_us_final = fila.get('usuario_final', '')
+                        st.session_state.c_tarifa = fila.get('tarifa_aplicada', 'SSAS (Servicio Salud)')
                         st.session_state.vista_taller = "Cotizador"
-                        st.session_state.paso_actual = 2
+                        st.session_state.sub_paso = 1 # Saltar directo al Paso 1
+                        guardar_borrador()
                         st.rerun()
             else: st.success("¡Excelente! No tienes solicitudes pendientes.")
 
     elif st.session_state.vista_taller == "Cotizador":
-        if st.session_state.paso_actual == 1:
-            st.title("Nueva Cotización Express")
-            pat_texto = st.text_input("Ingresa la Patente (Opcional)").upper()
-            if st.button("Abrir Formulario", type="primary"):
-                st.session_state.patente_confirmada = pat_texto
-                st.session_state.origen_inyectado = "Propio Cristian"
-                st.session_state.paso_actual = 2
+        if 'sub_paso' not in st.session_state: st.session_state.sub_paso = 0
+        
+        # PANTALLA 0: Pedir Patente (Solo para Cotización Libre)
+        if st.session_state.sub_paso == 0:
+            st.title("Nueva Cotización Libre")
+            pat_in = st.text_input("Ingresa la Patente (Opcional)").upper()
+            if st.button("Iniciar Flujo ➡️", type="primary"):
+                st.session_state.c_patente = pat_in
+                st.session_state.c_origen = "Propio Cristian"
+                st.session_state.sub_paso = 1
+                guardar_borrador()
                 st.rerun()
 
-        elif st.session_state.paso_actual == 2:
-            p_in = st.session_state.patente_confirmada
-            sol_id = st.session_state.get('sol_activa')
+        else:
+            # BARRA DE PROGRESO WIZARD
+            st.progress(st.session_state.sub_paso / 3.0)
+            
+            p_in = st.session_state.get('c_patente', '')
             datos_v = buscar_vehiculo_en_directorio(p_in) if p_in else None
-            
-            st.title("📝 Configuración de Precios y Formulario")
-            
-            # EL CAMBIO A "CLIENTE"
-            origen_sel = st.selectbox("Cliente", ["Kaufmann", "Propio Cristian"], index=0 if st.session_state.get('origen_inyectado') == "Kaufmann" else 1)
-            
-            cf1, cf2 = st.columns(2)
-            cliente_default = "KAUFMANN S.A." if origen_sel == "Kaufmann" else datos_v.get('nombre_contacto', '') if datos_v else ""
-            rut_default = "92.475.000-6" if origen_sel == "Kaufmann" else datos_v.get('rut_facturacion', '') if datos_v else ""
-            
-            cli_fac = cf1.text_input("Señor(es) (Facturación)", value=cliente_default)
-            rut_fac = cf2.text_input("RUT de Facturación", value=rut_default)
-            
-            destino_default = st.session_state.get('usuario_final_inyectado') if st.session_state.get('usuario_final_inyectado') else datos_v.get('cliente_final', '') if datos_v else ''
-            us_final_pdf = st.text_input("Usuario Final / Destino (Texto para el PDF)", value=destino_default)
-            
-            cv1, cv2 = st.columns(2)
-            marca_db = datos_v.get('marca') if datos_v else None
-            idx_marca = list(CATALOGO.keys()).index(marca_db) if marca_db in CATALOGO else 0
-            
-            marca_sel = cv1.selectbox("Marca", list(CATALOGO.keys()), index=idx_marca)
-            mod_disp = CATALOGO[marca_sel] if marca_sel != "--- Seleccione Marca ---" else ["---"]
-            
-            modelo_db = datos_v.get('modelo') if datos_v else None
-            idx_mod = mod_disp.index(modelo_db) if modelo_db in mod_disp else 0
-            modelo_sel = cv2.selectbox("Modelo", mod_disp, index=idx_mod)
-            
-            st.markdown("---")
-            st.subheader("🛠️ Selección de Trabajos con Tarifa Inteligente")
-            
-            ops_tarifas = ["SSAS (Servicio Salud)", "SAMU", "Hospital Temuco", "Hospital Villarrica", "Hospital Lautaro", "Hospital Pitrufquen", "Gendarmería de Chile", "Cliente Particular"]
-            tarifa_default = "SSAS (Servicio Salud)"
-            if st.session_state.get('tarifa_inyectada'): tarifa_default = st.session_state.get('tarifa_inyectada')
-            elif datos_v and datos_v.get('tipo_cliente'): tarifa_default = datos_v.get('tipo_cliente')
-            
-            idx_t = ops_tarifas.index(tarifa_default) if tarifa_default in ops_tarifas else 0
-            tarifa_calculadora = st.selectbox("Tarifa Base a Aplicar (Cobro)", ops_tarifas, index=idx_t)
 
-            col_tarifa_a_buscar = MAPEO_TARIFAS.get(tarifa_calculadora, "costo_ssas")
-            
-            sel_final = [] # Inicializamos la lista maestra de cobros aquí
-            
-            # EL CAMBIO A MÚLTIPLES PESTAÑAS (TABS) PARA LA LISTA DE PRECIOS
-            if not DF_PRECIOS.empty and 'categoria' in DF_PRECIOS.columns:
-                cat_disponibles = sorted(DF_PRECIOS['categoria'].dropna().unique().tolist())
-                tabs_cat = st.tabs(cat_disponibles)
+            # PASO 1: DATOS CLIENTE Y VEHÍCULO
+            if st.session_state.sub_paso == 1:
+                st.header("Paso 1: Datos Administrativos y del Vehículo")
                 
-                for i, cat in enumerate(cat_disponibles):
-                    with tabs_cat[i]:
-                        df_cat = DF_PRECIOS[DF_PRECIOS['categoria'] == cat].copy()
-                        df_cat.loc[:, col_tarifa_a_buscar] = pd.to_numeric(df_cat[col_tarifa_a_buscar], errors='coerce').fillna(0)
-                        items_v = df_cat[df_cat[col_tarifa_a_buscar] > 0]
-                        
-                        if items_v.empty: 
-                            st.info("⚠️ Esta categoría no tiene precios configurados para la tarifa seleccionada.")
-                        else:
-                            for idx, row in items_v.iterrows():
-                                with st.container():
+                # Autocompletado Base
+                if 'c_cli_fac' not in st.session_state:
+                    st.session_state.c_cli_fac = "KAUFMANN S.A." if st.session_state.get('c_origen') == "Kaufmann" else datos_v.get('nombre_contacto', '') if datos_v else ""
+                if 'c_rut_fac' not in st.session_state:
+                    st.session_state.c_rut_fac = "92.475.000-6" if st.session_state.get('c_origen') == "Kaufmann" else datos_v.get('rut_facturacion', '') if datos_v else ""
+                if 'c_us_final' not in st.session_state:
+                    st.session_state.c_us_final = datos_v.get('cliente_final', '') if datos_v else ''
+
+                st.session_state.c_origen = st.selectbox("Cliente", ["Kaufmann", "Propio Cristian"], index=0 if st.session_state.get('c_origen')=="Kaufmann" else 1)
+                
+                cf1, cf2 = st.columns(2)
+                st.session_state.c_cli_fac = cf1.text_input("Señor(es) (Facturación)", value=st.session_state.c_cli_fac)
+                st.session_state.c_rut_fac = cf2.text_input("RUT de Facturación", value=st.session_state.c_rut_fac)
+                st.session_state.c_us_final = st.text_input("Usuario Final / Destino (Texto para el PDF)", value=st.session_state.c_us_final)
+                
+                cv1, cv2 = st.columns(2)
+                marca_db = st.session_state.get('c_marca', datos_v.get('marca') if datos_v else None)
+                idx_marca = list(CATALOGO.keys()).index(marca_db) if marca_db in CATALOGO else 0
+                st.session_state.c_marca = cv1.selectbox("Marca", list(CATALOGO.keys()), index=idx_marca)
+                
+                mod_disp = CATALOGO[st.session_state.c_marca] if st.session_state.c_marca != "--- Seleccione Marca ---" else ["---"]
+                modelo_db = st.session_state.get('c_modelo', datos_v.get('modelo') if datos_v else None)
+                idx_mod = mod_disp.index(modelo_db) if modelo_db in mod_disp else 0
+                st.session_state.c_modelo = cv2.selectbox("Modelo", mod_disp, index=idx_mod)
+                
+                st.markdown("---")
+                if st.button("Continuar a Trabajos y Precios ➡️", type="primary"):
+                    st.session_state.sub_paso = 2
+                    guardar_borrador()
+                    st.rerun()
+
+            # PASO 2: COTIZACIÓN (TABS INTELIGENTES)
+            elif st.session_state.sub_paso == 2:
+                st.header("Paso 2: Valorización de Trabajos")
+                
+                ops_tarifas = ["SSAS (Servicio Salud)", "SAMU", "Hospital Temuco", "Hospital Villarrica", "Hospital Lautaro", "Hospital Pitrufquen", "Gendarmería de Chile", "Cliente Particular"]
+                tarifa_default = st.session_state.get('c_tarifa') if st.session_state.get('c_tarifa') else datos_v.get('tipo_cliente') if datos_v else "SSAS (Servicio Salud)"
+                idx_t = ops_tarifas.index(tarifa_default) if tarifa_default in ops_tarifas else 0
+                st.session_state.c_tarifa = st.selectbox("Tarifa Base Aplicada (Fórmula Interna)", ops_tarifas, index=idx_t)
+                col_tarifa_a_buscar = MAPEO_TARIFAS.get(st.session_state.c_tarifa, "costo_ssas")
+                
+                sel_final = []
+                
+                if not DF_PRECIOS.empty and 'categoria' in DF_PRECIOS.columns:
+                    cat_disp = sorted(DF_PRECIOS['categoria'].dropna().unique().tolist())
+                    tabs_cat = st.tabs(cat_disp + ["📝 Manual", "🛒 Repuestos"])
+                    
+                    # TABS DE LA MATRIZ DE PRECIOS
+                    for i, cat in enumerate(cat_disp):
+                        with tabs_cat[i]:
+                            df_cat = DF_PRECIOS[DF_PRECIOS['categoria'] == cat].copy()
+                            df_cat.loc[:, col_tarifa_a_buscar] = pd.to_numeric(df_cat[col_tarifa_a_buscar], errors='coerce').fillna(0)
+                            items_v = df_cat[df_cat[col_tarifa_a_buscar] > 0]
+                            
+                            if items_v.empty: st.info("Sin precios configurados aquí.")
+                            else:
+                                for idx, row in items_v.iterrows():
                                     cc1, cc2, cc3 = st.columns([5.5, 1.5, 2], vertical_alignment="center")
                                     cc1.markdown(f"**{row['trabajo']}**")
-                                    
                                     k = f"q_{row['trabajo']}_{idx}"
                                     qty = cc2.number_input("", 0, 20, value=st.session_state.get(k, 0), key=k, label_visibility="collapsed")
-                                    
                                     p = float(row[col_tarifa_a_buscar])
                                     cc3.markdown(f"**{format_clp(p)}**")
-                                    
                                     if qty > 0: 
-                                        sel_final.append({
-                                            "Descripción": row['trabajo'], 
-                                            "Cantidad": qty, 
-                                            "Unitario_Costo": p, 
-                                            "Total_Costo": p * qty
-                                        })
+                                        sel_final.append({"Descripción": row['trabajo'], "Cantidad": qty, "Unitario_Costo": p, "Total_Costo": p * qty})
+                    
+                    # TAB MANUAL
+                    with tabs_cat[-2]:
+                        cm1, cm2 = st.columns([6, 2], vertical_alignment="center")
+                        dm = cm1.text_input("Operación Manual")
+                        pm = cm2.number_input("Costo ($)", min_value=0, step=5000)
+                        if st.button("Añadir Trabajo"):
+                            if dm and pm > 0:
+                                if 'lista_particular' not in st.session_state: st.session_state.lista_particular = []
+                                st.session_state.lista_particular.append({"Descripción": dm, "Cantidad": 1, "Unitario_Costo": pm, "Total_Costo": pm})
+                                guardar_borrador()
+                                st.rerun()
+                        if 'lista_particular' in st.session_state:
+                            for idx, item in enumerate(st.session_state.lista_particular):
+                                ca, cb = st.columns([6, 1], vertical_alignment="center")
+                                ca.markdown(f"• {item['Descripción']} - **{format_clp(item['Total_Costo'])}**")
+                                if cb.button("🗑️", key=f"dm_{idx}"): st.session_state.lista_particular.pop(idx); guardar_borrador(); st.rerun()
+                            sel_final.extend(st.session_state.lista_particular)
 
-            st.markdown("---")
-            tab_manual, tab_repuestos = st.tabs(["📝 Operaciones Manuales", "🛒 Repuestos"])
-            
-            with tab_manual:
-                cc1, cc2 = st.columns([6, 2], vertical_alignment="center")
-                dm = cc1.text_input("Trabajo Extra / Operación Manual")
-                pm = cc2.number_input("Costo Neto ($)", min_value=0, step=5000)
-                if st.button("Añadir Operación"):
-                    if dm and pm > 0:
-                        if 'lista_particular' not in st.session_state: st.session_state.lista_particular = []
-                        st.session_state.lista_particular.append({"Descripción": dm, "Cantidad": 1, "Unitario_Costo": pm, "Total_Costo": pm})
-                        st.rerun()
-                if 'lista_particular' in st.session_state:
-                    for idx, i in enumerate(st.session_state.lista_particular):
-                        ca, cb = st.columns([6, 1], vertical_alignment="center")
-                        ca.markdown(f"• {i['Descripción']} - **{format_clp(i['Total_Costo'])}**")
-                        if cb.button("🗑️", key=f"dm_{idx}"): st.session_state.lista_particular.pop(idx); st.rerun()
-                    sel_final.extend(st.session_state.lista_particular)
-
-            with tab_repuestos:
-                cx1, cx2 = st.columns([3, 1])
-                d_rep = cx1.text_input("Descripción Repuesto")
-                q_rep = cx2.number_input("Cant", 1)
-                cx3, cx4, cx5 = st.columns(3)
-                c_rep = cx3.number_input("Costo ($)", 0, step=1000)
-                c_env = cx4.number_input("Envío ($)", 0, step=1000)
-                m_pct = cx5.number_input("Margen %", 0, 100, 30)
-                p_final = int((c_rep + c_env) * (1 + m_pct / 100.0))
-                st.markdown(f"#### Precio de Venta: **{format_clp(p_final)}**")
+                    # TAB REPUESTOS
+                    with tabs_cat[-1]:
+                        cr1, cr2 = st.columns([3, 1])
+                        d_rep = cr1.text_input("Repuesto")
+                        q_rep = cr2.number_input("Cant", 1)
+                        cr3, cr4, cr5 = st.columns(3)
+                        c_rep = cr3.number_input("Costo ($)", 0, step=1000)
+                        c_env = cr4.number_input("Envío ($)", 0, step=1000)
+                        m_pct = cr5.number_input("Margen %", 0, 100, 30)
+                        p_final = int((c_rep + c_env) * (1 + m_pct / 100.0))
+                        st.markdown(f"**A Cobrar:** {format_clp(p_final)}")
+                        if st.button("Añadir Repuesto"):
+                            if d_rep and p_final > 0:
+                                if 'lista_repuestos' not in st.session_state: st.session_state.lista_repuestos = []
+                                st.session_state.lista_repuestos.append({"Descripción": d_rep, "Cantidad": q_rep, "Unitario_Costo": float(p_final), "Total_Costo": float(p_final * q_rep)})
+                                guardar_borrador()
+                                st.rerun()
+                        if 'lista_repuestos' in st.session_state:
+                            for idx, item in enumerate(st.session_state.lista_repuestos):
+                                ca, cb = st.columns([6, 1], vertical_alignment="center")
+                                ca.text(f"• {item['Cantidad']}x {item['Descripción']} - {format_clp(item['Total_Costo'])}")
+                                if cb.button("🗑️", key=f"dr_{idx}"): st.session_state.lista_repuestos.pop(idx); guardar_borrador(); st.rerun()
+                            sel_final.extend(st.session_state.lista_repuestos)
+                            
+                st.session_state.sel_final_cache = sel_final # Guardamos para el paso 3
                 
-                if st.button("Añadir Repuesto"):
-                    if d_rep and p_final > 0:
-                        if 'lista_repuestos' not in st.session_state: st.session_state.lista_repuestos = []
-                        st.session_state.lista_repuestos.append({"Descripción": d_rep, "Cantidad": q_rep, "Unitario_Costo": float(p_final), "Total_Costo": float(p_final * q_rep)})
-                        st.rerun()
-                if 'lista_repuestos' in st.session_state:
-                    for idx, i in enumerate(st.session_state.lista_repuestos):
-                        ca, cb = st.columns([6, 1], vertical_alignment="center")
-                        ca.text(f"• {i['Cantidad']}x {i['Descripción']} - {format_clp(i['Total_Costo'])}")
-                        if cb.button("🗑️", key=f"dr_{idx}"): st.session_state.lista_repuestos.pop(idx); st.rerun()
-                    sel_final.extend(st.session_state.lista_repuestos)
-
-            if sel_final:
                 st.markdown("---")
+                col_b1, col_b2 = st.columns(2)
+                if col_b1.button("⬅️ Volver a Datos Administrativos"):
+                    st.session_state.sub_paso = 1
+                    guardar_borrador()
+                    st.rerun()
+                if col_b2.button("Ir al Resumen y Generar PDF ➡️", type="primary"):
+                    if not sel_final: st.warning("Debes agregar al menos 1 trabajo o repuesto.")
+                    else:
+                        st.session_state.sub_paso = 3
+                        guardar_borrador()
+                        st.rerun()
+
+            # PASO 3: RESUMEN Y EMISIÓN
+            elif st.session_state.sub_paso == 3:
+                st.header("Paso 3: Resumen y Emisión")
+                sel_final = st.session_state.get('sel_final_cache', [])
+                
                 tn = sum(x['Total_Costo'] for x in sel_final)
                 iv = tn * 0.19
                 tf = tn + iv
+                
+                st.table(pd.DataFrame([{"Ítem": x['Descripción'], "Cant": x['Cantidad'], "Total": format_clp(x['Total_Costo'])} for x in sel_final]))
                 
                 k1, k2, k3 = st.columns(3)
                 k1.metric("SUB TOTAL NETO", format_clp(tn))
@@ -594,68 +684,52 @@ elif st.session_state.usuario == "Cristian":
                 obs = st.text_area("Observaciones del Taller:")
                 est = st.radio("Fase del Trabajo:", ("En Espera de Aprobación", "Trabajo Realizado"))
                 
+                st.markdown("---")
+                col_b1, col_b2 = st.columns(2)
+                if col_b1.button("⬅️ Volver a Trabajos"):
+                    st.session_state.sub_paso = 2
+                    guardar_borrador()
+                    st.rerun()
+                
                 if 'presupuesto_generado' not in st.session_state:
-                    if st.button("💾 GUARDAR ORDEN Y GENERAR DOCUMENTO", type="primary", use_container_width=True):
-                        try:
-                            if p_in:
-                                supabase.table("directorio_vehiculos").upsert({
-                                    "patente": p_in, "rut_facturacion": rut_fac, 
-                                    "marca": marca_sel, "modelo": modelo_sel
-                                }).execute()
+                    if col_b2.button("💾 GUARDAR Y GENERAR PDF", type="primary", use_container_width=True):
+                        with st.spinner("Conectando con Supabase..."):
+                            try:
+                                if p_in:
+                                    supabase.table("directorio_vehiculos").upsert({"patente": p_in, "rut_facturacion": st.session_state.c_rut_fac, "marca": st.session_state.c_marca, "modelo": st.session_state.c_modelo}).execute()
 
-                            if sol_id:
-                                corr_id = str(sol_id)
-                                pdf_b = generar_pdf_oficial(p_in, marca_sel, modelo_sel, cli_fac, rut_fac, sel_final, tn, False, est, us_final_pdf, obs, corr_id)
-                                n_pdf = f"Presupuesto_{corr_id}.pdf"
-                                url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
-                                supabase.table("historial_trabajos").update({
-                                    "estado": "Generado", "total_clp": tf, "pdf_url": url_doc, 
-                                    "origen_trabajo": origen_sel, "usuario_final": us_final_pdf, "tarifa_aplicada": tarifa_calculadora, "nombre_cliente_manual": cli_fac
-                                }).eq("id_cotizacion", sol_id).execute()
-                            else:
-                                res = supabase.table("historial_trabajos").insert({
-                                    "patente": p_in if p_in else None, "origen_trabajo": origen_sel, "nombre_cliente_manual": cli_fac,
-                                    "usuario_final": us_final_pdf, "tarifa_aplicada": tarifa_calculadora,
-                                    "estado": "Generado", "total_clp": tf, "creado_por": "Cristian"
-                                }).execute()
-                                corr_id = str(res.data[0]['id_cotizacion'])
-                                pdf_b = generar_pdf_oficial(p_in, marca_sel, modelo_sel, cli_fac, rut_fac, sel_final, tn, False, est, us_final_pdf, obs, corr_id)
-                                n_pdf = f"Presupuesto_{corr_id}.pdf"
-                                url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
-                                supabase.table("historial_trabajos").update({"pdf_url": url_doc}).eq("id_cotizacion", corr_id).execute()
-                                
-                            st.session_state['presupuesto_generado'] = {'pdf': pdf_b, 'nombre': n_pdf, 'url': url_doc}
-                            st.rerun()
-                        except Exception as e_gen: st.error(f"Error: {e_gen}")
+                                sol_id = st.session_state.get('sol_activa')
+                                if sol_id:
+                                    corr_id = str(sol_id)
+                                    pdf_b = generar_pdf_oficial(p_in, st.session_state.c_marca, st.session_state.c_modelo, st.session_state.c_cli_fac, st.session_state.c_rut_fac, sel_final, tn, False, est, st.session_state.c_us_final, obs, corr_id)
+                                    n_pdf = f"Presupuesto_{corr_id}.pdf"
+                                    url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
+                                    supabase.table("historial_trabajos").update({
+                                        "estado": "Generado", "total_clp": tf, "pdf_url": url_doc, 
+                                        "origen_trabajo": st.session_state.c_origen, "usuario_final": st.session_state.c_us_final, "tarifa_aplicada": st.session_state.c_tarifa, "nombre_cliente_manual": st.session_state.c_cli_fac
+                                    }).eq("id_cotizacion", sol_id).execute()
+                                else:
+                                    res = supabase.table("historial_trabajos").insert({
+                                        "patente": p_in if p_in else None, "origen_trabajo": st.session_state.c_origen, "nombre_cliente_manual": st.session_state.c_cli_fac,
+                                        "usuario_final": st.session_state.c_us_final, "tarifa_aplicada": st.session_state.c_tarifa,
+                                        "estado": "Generado", "total_clp": tf, "creado_por": "Cristian"
+                                    }).execute()
+                                    corr_id = str(res.data[0]['id_cotizacion'])
+                                    pdf_b = generar_pdf_oficial(p_in, st.session_state.c_marca, st.session_state.c_modelo, st.session_state.c_cli_fac, st.session_state.c_rut_fac, sel_final, tn, False, est, st.session_state.c_us_final, obs, corr_id)
+                                    n_pdf = f"Presupuesto_{corr_id}.pdf"
+                                    url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
+                                    supabase.table("historial_trabajos").update({"pdf_url": url_doc}).eq("id_cotizacion", corr_id).execute()
+                                    
+                                st.session_state['presupuesto_generado'] = {'pdf': pdf_b, 'nombre': n_pdf, 'url': url_doc}
+                                eliminar_borrador() # ¡Borrador cumplió su función!
+                                st.rerun()
+                            except Exception as e_gen: st.error(f"Error: {e_gen}")
                 else:
                     d = st.session_state['presupuesto_generado']
-                    st.success("✅ Documento Oficial guardado.")
+                    st.success("✅ Documento Oficial guardado en Supabase.")
                     st.download_button("📥 DESCARGAR PDF", d['pdf'], d['nombre'], "application/pdf")
-                    
-                    st.markdown("---")
-                    st.subheader("📧 Enviar Correo al Cliente")
-                    dir_c = cargar_directorio_correos()
-                    d_sel = st.multiselect("Contactos Frecuentes:", options=list(dir_c.keys()), default=[])
-                    e_ad = st.text_input("Correos Adicionales (separados por coma):")
-                    e_as = st.text_input("Asunto:", value=f"{d['nombre'].replace('.pdf', '')} - C.H. Servicio Automotriz")
-                    e_ms = st.text_area("Mensaje:", value=f"Estimado(a),\n\nAdjunto enviamos el presupuesto solicitado para la patente {p_in}.\n\nSaludos cordiales.")
-                    
-                    if st.button("📤 Enviar Correo", type="primary"):
-                        lc = [dir_c[n] for n in d_sel]
-                        if e_ad: lc.extend([e.strip() for e in e_ad.split(',') if e.strip()])
-                        dfinal = ", ".join(lc)
-                        if dfinal:
-                            with st.spinner("Enviando..."):
-                                ex, m = enviar_correo(dfinal, e_as, e_ms, d['pdf'], d['nombre'], EMAIL_SISTEMA)
-                            if ex:
-                                supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", sol_id if sol_id else d['nombre'].split('_')[1].replace('.pdf','')).execute()
-                                st.success("✅ Enviado exitosamente.")
-                            else: st.error(f"❌ {m}")
-                        else: st.warning("Ingresa un destinatario.")
-                    
-                    if st.button("🔄 Finalizar y Cerrar Ciclo"):
-                        for k in ['lista_particular', 'lista_repuestos', 'presupuesto_generado', 'sol_activa']:
-                            if k in st.session_state: del st.session_state[k]
+                    if st.button("🏠 Finalizar y Volver al Inicio", type="primary"):
+                        limpiar_sesion_cristian()
                         st.session_state.vista_taller = "Bandeja"
                         st.rerun()
 
@@ -666,7 +740,7 @@ elif st.session_state.usuario == "Cristian":
             lupa = st.text_input("🔍 Buscar por Patente...").upper()
             if lupa: df_todo = df_todo[df_todo['patente'].str.contains(lupa, na=False)]
             
-            t1, t2, t3 = st.tabs(["🟡 Por Enviar", "🔵 Enviados", "🟢 Aprobados/Cerrados"])
+            t1, t2, t3 = st.tabs(["🟡 Por Enviar", "🔵 Enviados", "🟢 Aprobados (Marcar Realizado)"])
             with t1:
                 for idx, r in df_todo[df_todo['estado'] == 'Generado'].iterrows():
                     ca, cb, cc = st.columns([4, 1.5, 1])
@@ -680,11 +754,19 @@ elif st.session_state.usuario == "Cristian":
                     ca, cb, cc = st.columns([4, 1.5, 1])
                     ca.write(f"🔵 N° {r['id_cotizacion']} | Patente: {r['patente']} | Total: ${r['total_clp']:,.0f}")
                     if pd.notna(r.get('pdf_url')): cb.markdown(f"[📥 Descargar]({r['pdf_url']})")
-                    if cc.button("🟢 Aprobar", key=f"a_{r['id_cotizacion']}"):
-                        supabase.table("historial_trabajos").update({"estado": "Aprobado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
-                        st.rerun()
+                    cc.info("Esperando Aprobación de Gabo")
             with t3:
-                df_fin = df_todo[df_todo['estado'].isin(['Aprobado', 'Terminado'])]
-                if not df_fin.empty: 
-                    exist_cols = [c for c in ['id_cotizacion', 'patente', 'usuario_final', 'estado', 'total_clp', 'pdf_url'] if c in df_fin.columns]
-                    st.dataframe(df_fin[exist_cols], use_container_width=True)
+                df_apr = df_todo[df_todo['estado'] == 'Aprobado']
+                if not df_apr.empty:
+                    for idx, r in df_apr.iterrows():
+                        ca, cb, cc = st.columns([4, 1.5, 2])
+                        ca.write(f"🟢 N° {r['id_cotizacion']} | Patente: {r['patente']} | Total: ${r['total_clp']:,.0f}")
+                        if pd.notna(r.get('pdf_url')): cb.markdown(f"[📥 Descargar]({r['pdf_url']})")
+                        if cc.button("🛠️ Marcar Realizado/Terminado", key=f"term_{r['id_cotizacion']}", type="primary"):
+                            supabase.table("historial_trabajos").update({"estado": "Terminado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
+                            st.success("¡Trabajo finalizado en Taller!"); time.sleep(1); st.rerun()
+                
+                st.markdown("---")
+                st.markdown("### Trabajos Históricos (Terminados)")
+                df_fin = df_todo[df_todo['estado'] == 'Terminado']
+                if not df_fin.empty: st.dataframe(df_fin[['id_cotizacion', 'patente', 'usuario_final', 'estado', 'total_clp']], use_container_width=True)
