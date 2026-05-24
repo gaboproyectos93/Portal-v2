@@ -280,7 +280,10 @@ def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, ite
     pdf.ln(15)
     pdf.set_text_color(0, 0, 0)
     pdf.cell(0, 6, f"Padre las Casas, {datetime.now().strftime('%d-%m-%Y')}", 0, 1, 'C')
-    return pdf.output(dest='S').encode('latin-1') if isinstance(pdf.output(dest='S'), str) else bytes(pdf.output(dest='S'))
+    
+    # Manejo robusto para exportar bytes independientemente de la versión de FPDF
+    salida = pdf.output(dest='S')
+    return salida.encode('latin-1') if isinstance(salida, str) else bytes(salida)
 
 # ==========================================
 # 4. FUNCIONES DE BASE DE DATOS Y BORRADOR
@@ -294,9 +297,11 @@ def buscar_vehiculo_en_directorio(patente):
 
 def subir_pdf_a_storage(nombre_archivo, pdf_bytes):
     try:
-        supabase.storage.from_("pdf_cotizaciones").upload(path=nombre_archivo, file=pdf_bytes, file_options={"content-type": "application/pdf"})
+        supabase.storage.from_("pdf_cotizaciones").upload(path=nombre_archivo, file=pdf_bytes, file_options={"content-type": "application/pdf", "upsert": "true"})
         return supabase.storage.from_("pdf_cotizaciones").get_public_url(nombre_archivo)
-    except: return None
+    except Exception as e: 
+        print(f"Error subiendo a Storage: {e}")
+        return None
 
 def registrar_solicitud_gabo(patente, contacto, telefono, correo, origen, destino_txt, tarifa_math, descripcion, n_sap, marca=None, modelo=None):
     try:
@@ -687,69 +692,81 @@ elif st.session_state.usuario == "Cristian":
                 
                 sel_final = []
                 
-                if not DF_PRECIOS.empty and 'categoria' in DF_PRECIOS.columns:
+                # ADAPTACIÓN: SI LA TARIFA ES CLIENTE PARTICULAR, ESCONDER LA MATRIZ
+                if st.session_state.c_tarifa == "Cliente Particular":
+                    cat_disp = []
+                    tabs_cat = st.tabs(["📝 Manual", "🛒 Repuestos"])
+                elif not DF_PRECIOS.empty and 'categoria' in DF_PRECIOS.columns:
                     cat_disp = sorted(DF_PRECIOS['categoria'].dropna().unique().tolist())
                     nombres_tabs = [f"{EMOJIS_CAT.get(c, '🔧')} {c}" for c in cat_disp]
                     tabs_cat = st.tabs(nombres_tabs + ["📝 Manual", "🛒 Repuestos"])
-                    
-                    for i, cat in enumerate(cat_disp):
-                        with tabs_cat[i]:
-                            df_cat = DF_PRECIOS[DF_PRECIOS['categoria'] == cat].copy()
-                            df_cat.loc[:, col_tarifa_a_buscar] = pd.to_numeric(df_cat[col_tarifa_a_buscar], errors='coerce').fillna(0)
-                            items_v = df_cat[df_cat[col_tarifa_a_buscar] > 0]
+                else:
+                    cat_disp = []
+                    tabs_cat = st.tabs(["📝 Manual", "🛒 Repuestos"])
+                
+                # Renderizamos las pestañas de Matriz si existen
+                for i, cat in enumerate(cat_disp):
+                    with tabs_cat[i]:
+                        df_cat = DF_PRECIOS[DF_PRECIOS['categoria'] == cat].copy()
+                        df_cat.loc[:, col_tarifa_a_buscar] = pd.to_numeric(df_cat[col_tarifa_a_buscar], errors='coerce').fillna(0)
+                        items_v = df_cat[df_cat[col_tarifa_a_buscar] > 0]
+                        
+                        if items_v.empty: st.info("Sin precios configurados aquí.")
+                        else:
+                            for idx, row in items_v.iterrows():
+                                cc1, cc2, cc3 = st.columns([5.5, 1.5, 2], vertical_alignment="center")
+                                cc1.markdown(f"**{row['trabajo']}**")
+                                k = f"q_{row['trabajo']}_{idx}"
+                                qty = cc2.number_input("", 0, 20, value=st.session_state.get(k, 0), key=k, label_visibility="collapsed")
+                                p = float(row[col_tarifa_a_buscar])
+                                cc3.markdown(f"**{format_clp(p)}**")
+                                if qty > 0: 
+                                    sel_final.append({"Tipo": "matriz", "Descripción": row['trabajo'], "Cantidad": qty, "Unitario_Costo": p, "Total_Costo": p * qty, "Llave": k})
+                
+                # PESTAÑA MANUAL (Siempre penúltima [-2] con esta lógica, a menos que cat_disp esté vacío, entonces índice 0)
+                idx_manual = -2 if cat_disp else 0
+                with tabs_cat[idx_manual]:
+                    cm1, cm2 = st.columns([6, 2], vertical_alignment="center")
+                    dm = cm1.text_input("Operación Manual Nueva")
+                    pm = cm2.number_input("Costo Neto ($)", min_value=0, step=5000)
+                    if st.button("Añadir Trabajo Manual"):
+                        if dm and pm > 0:
+                            if 'lista_particular' not in st.session_state: st.session_state.lista_particular = []
+                            st.session_state.lista_particular.append({"Tipo": "manual", "Descripción": dm, "Cantidad": 1, "Unitario_Costo": pm, "Total_Costo": pm})
+                            guardar_trabajo_manual_db(dm, pm) 
+                            guardar_borrador()
+                            st.rerun()
                             
-                            if items_v.empty: st.info("Sin precios configurados aquí.")
-                            else:
-                                for idx, row in items_v.iterrows():
-                                    cc1, cc2, cc3 = st.columns([5.5, 1.5, 2], vertical_alignment="center")
-                                    cc1.markdown(f"**{row['trabajo']}**")
-                                    k = f"q_{row['trabajo']}_{idx}"
-                                    qty = cc2.number_input("", 0, 20, value=st.session_state.get(k, 0), key=k, label_visibility="collapsed")
-                                    p = float(row[col_tarifa_a_buscar])
-                                    cc3.markdown(f"**{format_clp(p)}**")
-                                    if qty > 0: 
-                                        sel_final.append({"Tipo": "matriz", "Descripción": row['trabajo'], "Cantidad": qty, "Unitario_Costo": p, "Total_Costo": p * qty, "Llave": k})
-                    
-                    with tabs_cat[-2]:
-                        cm1, cm2 = st.columns([6, 2], vertical_alignment="center")
-                        dm = cm1.text_input("Operación Manual Nueva")
-                        pm = cm2.number_input("Costo Neto ($)", min_value=0, step=5000)
-                        if st.button("Añadir Trabajo Manual"):
-                            if dm and pm > 0:
-                                if 'lista_particular' not in st.session_state: st.session_state.lista_particular = []
-                                st.session_state.lista_particular.append({"Tipo": "manual", "Descripción": dm, "Cantidad": 1, "Unitario_Costo": pm, "Total_Costo": pm})
-                                guardar_trabajo_manual_db(dm, pm) 
-                                guardar_borrador()
-                                st.rerun()
-                                
-                        h_manuales = cargar_trabajos_manuales_historicos()
-                        if h_manuales:
-                            with st.expander("⏱️ Cargar trabajos manuales anteriores"):
-                                for hm in h_manuales:
-                                    ca, cb = st.columns([6, 1])
-                                    ca.text(f"• {hm['descripcion']} - {format_clp(hm['costo'])}")
-                                    if cb.button("➕", key=f"add_hm_{hm['id']}"):
-                                        if 'lista_particular' not in st.session_state: st.session_state.lista_particular = []
-                                        st.session_state.lista_particular.append({"Tipo": "manual", "Descripción": hm['descripcion'], "Cantidad": 1, "Unitario_Costo": hm['costo'], "Total_Costo": hm['costo']})
-                                        guardar_borrador(); st.rerun()
+                    h_manuales = cargar_trabajos_manuales_historicos()
+                    if h_manuales:
+                        with st.expander("⏱️ Cargar trabajos manuales anteriores"):
+                            for hm in h_manuales:
+                                ca, cb = st.columns([6, 1])
+                                ca.text(f"• {hm['descripcion']} - {format_clp(hm['costo'])}")
+                                if cb.button("➕", key=f"add_hm_{hm['id']}"):
+                                    if 'lista_particular' not in st.session_state: st.session_state.lista_particular = []
+                                    st.session_state.lista_particular.append({"Tipo": "manual", "Descripción": hm['descripcion'], "Cantidad": 1, "Unitario_Costo": hm['costo'], "Total_Costo": hm['costo']})
+                                    guardar_borrador(); st.rerun()
 
-                    with tabs_cat[-1]:
-                        cr1, cr2 = st.columns([3, 1])
-                        d_rep = cr1.text_input("Repuesto")
-                        q_rep = cr2.number_input("Cant", 1)
-                        cr3, cr4, cr5 = st.columns(3)
-                        c_rep = cr3.number_input("Costo ($)", 0, step=1000)
-                        c_env = cr4.number_input("Envío ($)", 0, step=1000)
-                        m_pct = cr5.number_input("Margen %", 0, 100, 30)
-                        p_final = int((c_rep + c_env) * (1 + m_pct / 100.0))
-                        st.markdown(f"**A Cobrar:** {format_clp(p_final)}")
-                        if st.button("Añadir Repuesto"):
-                            if d_rep and p_final > 0:
-                                if 'lista_repuestos' not in st.session_state: st.session_state.lista_repuestos = []
-                                st.session_state.lista_repuestos.append({"Tipo": "repuesto", "Descripción": d_rep, "Cantidad": q_rep, "Unitario_Costo": float(p_final), "Total_Costo": float(p_final * q_rep)})
-                                guardar_borrador()
-                                st.rerun()
-                                
+                # PESTAÑA REPUESTOS (Siempre última [-1] o índice 1)
+                idx_rep = -1 if cat_disp else 1
+                with tabs_cat[idx_rep]:
+                    cr1, cr2 = st.columns([3, 1])
+                    d_rep = cr1.text_input("Repuesto")
+                    q_rep = cr2.number_input("Cant", 1)
+                    cr3, cr4, cr5 = st.columns(3)
+                    c_rep = cr3.number_input("Costo ($)", 0, step=1000)
+                    c_env = cr4.number_input("Envío ($)", 0, step=1000)
+                    m_pct = cr5.number_input("Margen %", 0, 100, 30)
+                    p_final = int((c_rep + c_env) * (1 + m_pct / 100.0))
+                    st.markdown(f"**A Cobrar:** {format_clp(p_final)}")
+                    if st.button("Añadir Repuesto"):
+                        if d_rep and p_final > 0:
+                            if 'lista_repuestos' not in st.session_state: st.session_state.lista_repuestos = []
+                            st.session_state.lista_repuestos.append({"Tipo": "repuesto", "Descripción": d_rep, "Cantidad": q_rep, "Unitario_Costo": float(p_final), "Total_Costo": float(p_final * q_rep)})
+                            guardar_borrador()
+                            st.rerun()
+                            
                 if 'lista_particular' in st.session_state: sel_final.extend(st.session_state.lista_particular)
                 if 'lista_repuestos' in st.session_state: sel_final.extend(st.session_state.lista_repuestos)
                 
@@ -796,7 +813,6 @@ elif st.session_state.usuario == "Cristian":
             elif st.session_state.sub_paso == 3:
                 st.header("Paso 3: Emisión de Documento")
                 
-                # ESCUDO ANTI-RETROCESO: Si el PDF se generó, esconder el botón volver.
                 if 'presupuesto_generado' not in st.session_state:
                     if st.button("⬅️ Volver al Carrito de Trabajos"):
                         st.session_state.sub_paso = 2
@@ -813,7 +829,7 @@ elif st.session_state.usuario == "Cristian":
                     
                     st.markdown("---")
                     if st.button("💾 GUARDAR Y GENERAR PDF", type="primary", use_container_width=True):
-                        with st.spinner("Conectando con Supabase..."):
+                        with st.spinner("Conectando con Supabase y Generando Archivo..."):
                             try:
                                 if p_in:
                                     supabase.table("directorio_vehiculos").upsert({"patente": p_in, "rut_facturacion": st.session_state.c_rut_fac, "marca": st.session_state.c_marca, "modelo": st.session_state.c_modelo}).execute()
@@ -824,10 +840,15 @@ elif st.session_state.usuario == "Cristian":
                                     pdf_b = generar_pdf_oficial(p_in, st.session_state.c_marca, st.session_state.c_modelo, st.session_state.c_cli_fac, st.session_state.c_rut_fac, sel_final, tn, False, est, st.session_state.c_us_final, obs, corr_id, st.session_state.get('c_nsap', ''))
                                     n_pdf = f"Presupuesto_{corr_id}.pdf"
                                     url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
-                                    supabase.table("historial_trabajos").update({
-                                        "estado": "Generado", "total_clp": tf, "pdf_url": url_doc, 
-                                        "origen_trabajo": st.session_state.c_origen, "usuario_final": st.session_state.c_us_final, "tarifa_aplicada": st.session_state.c_tarifa, "nombre_cliente_manual": st.session_state.c_cli_fac
-                                    }).eq("id_cotizacion", sol_id).execute()
+                                    
+                                    if url_doc:
+                                        supabase.table("historial_trabajos").update({
+                                            "estado": "Generado", "total_clp": tf, "pdf_url": url_doc, 
+                                            "origen_trabajo": st.session_state.c_origen, "usuario_final": st.session_state.c_us_final, "tarifa_aplicada": st.session_state.c_tarifa, "nombre_cliente_manual": st.session_state.c_cli_fac
+                                        }).eq("id_cotizacion", sol_id).execute()
+                                    else:
+                                        st.error("Error al subir archivo. Revisa si creaste la carpeta 'pdf_cotizaciones' como Pública en Storage.")
+                                        st.stop()
                                 else:
                                     res = supabase.table("historial_trabajos").insert({
                                         "patente": p_in if p_in else None, "origen_trabajo": st.session_state.c_origen, "nombre_cliente_manual": st.session_state.c_cli_fac,
@@ -838,12 +859,17 @@ elif st.session_state.usuario == "Cristian":
                                     pdf_b = generar_pdf_oficial(p_in, st.session_state.c_marca, st.session_state.c_modelo, st.session_state.c_cli_fac, st.session_state.c_rut_fac, sel_final, tn, False, est, st.session_state.c_us_final, obs, corr_id, "")
                                     n_pdf = f"Presupuesto_{corr_id}.pdf"
                                     url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
-                                    supabase.table("historial_trabajos").update({"pdf_url": url_doc}).eq("id_cotizacion", corr_id).execute()
+                                    
+                                    if url_doc:
+                                        supabase.table("historial_trabajos").update({"pdf_url": url_doc}).eq("id_cotizacion", corr_id).execute()
+                                    else:
+                                        st.error("Error al subir archivo. Revisa si creaste la carpeta 'pdf_cotizaciones' como Pública en Storage.")
+                                        st.stop()
                                     
                                 st.session_state['presupuesto_generado'] = {'pdf': pdf_b, 'nombre': n_pdf, 'url': url_doc}
                                 eliminar_borrador() 
                                 st.rerun()
-                            except Exception as e_gen: st.error(f"Error: {e_gen}")
+                            except Exception as e_gen: st.error(f"Error Crítico: {e_gen}")
                 else:
                     d = st.session_state['presupuesto_generado']
                     st.success("✅ Documento Oficial guardado en Supabase.")
@@ -873,8 +899,13 @@ elif st.session_state.usuario == "Cristian":
                                     ex, m = enviar_correo(dfinal, e_as, e_ms, d['pdf'], d['nombre'], EMAIL_SISTEMA)
                                 if ex:
                                     sol_id = st.session_state.get('sol_activa')
-                                    supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", sol_id if sol_id else num_pres).execute()
-                                    st.success("✅ Enviado exitosamente.")
+                                    id_a_actualizar = sol_id if sol_id else int(num_pres)
+                                    supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", id_a_actualizar).execute()
+                                    st.success("✅ Enviado exitosamente. Actualizando estado de la orden...")
+                                    time.sleep(1.5)
+                                    limpiar_sesion_cristian()
+                                    st.session_state.vista_taller = "Bandeja"
+                                    st.rerun()
                                 else: st.error(f"❌ {m}")
                             else: st.warning("Ingresa un destinatario.")
                     
