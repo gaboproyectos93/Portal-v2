@@ -218,9 +218,6 @@ def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, ite
     pdf.cell(190, 6, "  DATOS DEL VEHÍCULO / OPERACIÓN", 1, 1, 'L', 1)
     pdf.set_text_color(0, 0, 0)
     
-    # ---------------------------------------------
-    # FORMATO XX-XXXX DE PATENTE PARA EL PDF
-    # ---------------------------------------------
     pat_str = str(patente).upper() if patente else "SIN PATENTE"
     if pat_str != "SIN PATENTE":
         p_clean = pat_str.replace("-", "").replace(" ", "")
@@ -352,7 +349,6 @@ def guardar_borrador():
         'lista_particular': st.session_state.get('lista_particular', []),
         'lista_repuestos': st.session_state.get('lista_repuestos', [])
     }
-    # Guardar dinámicamente los contadores de la matriz inteligente
     for k in st.session_state.keys():
         if k.startswith("q_") and isinstance(st.session_state[k], int):
             datos[k] = st.session_state[k]
@@ -379,6 +375,11 @@ def limpiar_sesion_cristian():
         if k in claves_a_borrar or k.startswith("q_"):
             del st.session_state[k]
     eliminar_borrador()
+
+# CALLBACK PARA ELIMINAR ITEM DE MATRIZ SIN ERROR DE STREAMLIT
+def cb_eliminar_matriz(llave):
+    st.session_state[llave] = 0
+    guardar_borrador()
 
 # ==========================================
 # 5. CONTROL DE PERFILES Y SESIÓN
@@ -465,7 +466,6 @@ if st.session_state.usuario == "Gabo":
         
         st.markdown("---")
         
-        # Selección de Marca y Modelo para Gabo (Bloqueable)
         cv1, cv2 = st.columns(2)
         idx_marca = list(CATALOGO.keys()).index(st.session_state.g_marca) if st.session_state.g_marca in CATALOGO else 0
         marca_sel = cv1.selectbox("Marca", list(CATALOGO.keys()), index=idx_marca, disabled=st.session_state.g_vehiculo_existe)
@@ -486,7 +486,6 @@ if st.session_state.usuario == "Gabo":
         st.markdown("---")
         st.markdown("**📋 Datos de Contacto de quien gestiona la orden:**")
         
-        # Bloqueo inteligente de contacto
         nom_contacto = "Gabriel Poblete"
         dir_c = cargar_directorio_correos()
         correo_contacto = dir_c.get(nom_contacto, "gabriel.poblete@kaufmann.cl")
@@ -500,7 +499,6 @@ if st.session_state.usuario == "Gabo":
         desc = st.text_area("Instrucciones Específicas para Cristian")
         if st.button("Enviar Requerimiento al Taller", type="primary"):
             if desc:
-                # El origen de Gabo siempre será Kaufmann
                 if registrar_solicitud_gabo(pat, cont_nom, cont_tel, cont_cor, "Kaufmann", dest_inst, tarifa_aplicada, desc, n_sap_input, marca_sel, modelo_sel):
                     st.success("🚀 Asignado exitosamente.")
                     st.session_state.g_vehiculo_existe = False
@@ -770,18 +768,15 @@ elif st.session_state.usuario == "Cristian":
                         c_cant.markdown(f"x{item['Cantidad']}")
                         c_tot.markdown(f"**{format_clp(item['Total_Costo'])}**")
                         
-                        # ELIMINAR CUALQUIER TIPO DE ITEM
                         if item['Tipo'] == "matriz":
-                            if c_del.button("🗑️", key=f"del_mat_{idx}"):
-                                st.session_state[item['Llave']] = 0
-                                guardar_borrador(); st.rerun()
+                            c_del.button("🗑️", key=f"del_mat_{item['Llave']}", on_click=cb_eliminar_matriz, args=(item['Llave'],))
                         elif item['Tipo'] == "manual":
                             if c_del.button("🗑️", key=f"del_man_{idx}"):
-                                st.session_state.lista_particular = [i for i in st.session_state.lista_particular if i != item]
+                                st.session_state.lista_particular.remove(item)
                                 guardar_borrador(); st.rerun()
                         elif item['Tipo'] == "repuesto":
                             if c_del.button("🗑️", key=f"del_rep_{idx}"):
-                                st.session_state.lista_repuestos = [i for i in st.session_state.lista_repuestos if i != item]
+                                st.session_state.lista_repuestos.remove(item)
                                 guardar_borrador(); st.rerun()
                                 
                     st.markdown("---")
