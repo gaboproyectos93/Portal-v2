@@ -280,8 +280,6 @@ def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, ite
     pdf.ln(15)
     pdf.set_text_color(0, 0, 0)
     pdf.cell(0, 6, f"Padre las Casas, {datetime.now().strftime('%d-%m-%Y')}", 0, 1, 'C')
-    
-    # Manejo robusto para exportar bytes independientemente de la versión de FPDF
     salida = pdf.output(dest='S')
     return salida.encode('latin-1') if isinstance(salida, str) else bytes(salida)
 
@@ -297,10 +295,11 @@ def buscar_vehiculo_en_directorio(patente):
 
 def subir_pdf_a_storage(nombre_archivo, pdf_bytes):
     try:
-        supabase.storage.from_("pdf_cotizaciones").upload(path=nombre_archivo, file=pdf_bytes, file_options={"content-type": "application/pdf", "upsert": "true"})
-        return supabase.storage.from_("pdf_cotizaciones").get_public_url(nombre_archivo)
+        res = supabase.storage.from_("pdf_cotizaciones").upload(path=nombre_archivo, file=pdf_bytes, file_options={"content-type": "application/pdf", "upsert": "true"})
+        url = supabase.storage.from_("pdf_cotizaciones").get_public_url(nombre_archivo)
+        return url
     except Exception as e: 
-        print(f"Error subiendo a Storage: {e}")
+        st.error(f"Error Técnico de Supabase al subir PDF: {str(e)}")
         return None
 
 def registrar_solicitud_gabo(patente, contacto, telefono, correo, origen, destino_txt, tarifa_math, descripcion, n_sap, marca=None, modelo=None):
@@ -381,7 +380,6 @@ def limpiar_sesion_cristian():
             del st.session_state[k]
     eliminar_borrador()
 
-# CALLBACK PARA ELIMINAR ITEM DE MATRIZ SIN ERROR DE STREAMLIT
 def cb_eliminar_matriz(llave):
     st.session_state[llave] = 0
     guardar_borrador()
@@ -519,8 +517,13 @@ if st.session_state.usuario == "Gabo":
             for idx, r in df_enviadas.iterrows():
                 ca, cb, cc = st.columns([5, 1.5, 1.5])
                 ca.write(f"📄 N° {r['id_cotizacion']} | Patente: {r['patente']} | Total: {format_clp(r['total_clp'])}")
-                if pd.notna(r.get('pdf_url')): 
-                    cb.link_button("👁️ Ver PDF", r['pdf_url'])
+                
+                url_pdf = r.get('pdf_url')
+                if pd.notna(url_pdf) and isinstance(url_pdf, str) and url_pdf.startswith('http'):
+                    cb.link_button("👁️ Ver PDF", url_pdf)
+                else:
+                    cb.info("Sin Archivo")
+                    
                 if cc.button("✅ Aprobar Trabajo", key=f"apr_gb_{r['id_cotizacion']}", type="primary"):
                     supabase.table("historial_trabajos").update({"estado": "Aprobado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
                     st.success("Trabajo Aprobado."); time.sleep(1); st.rerun()
@@ -723,7 +726,7 @@ elif st.session_state.usuario == "Cristian":
                                 if qty > 0: 
                                     sel_final.append({"Tipo": "matriz", "Descripción": row['trabajo'], "Cantidad": qty, "Unitario_Costo": p, "Total_Costo": p * qty, "Llave": k})
                 
-                # PESTAÑA MANUAL (Siempre penúltima [-2] con esta lógica, a menos que cat_disp esté vacío, entonces índice 0)
+                # PESTAÑA MANUAL
                 idx_manual = -2 if cat_disp else 0
                 with tabs_cat[idx_manual]:
                     cm1, cm2 = st.columns([6, 2], vertical_alignment="center")
@@ -748,7 +751,7 @@ elif st.session_state.usuario == "Cristian":
                                     st.session_state.lista_particular.append({"Tipo": "manual", "Descripción": hm['descripcion'], "Cantidad": 1, "Unitario_Costo": hm['costo'], "Total_Costo": hm['costo']})
                                     guardar_borrador(); st.rerun()
 
-                # PESTAÑA REPUESTOS (Siempre última [-1] o índice 1)
+                # PESTAÑA REPUESTOS
                 idx_rep = -1 if cat_disp else 1
                 with tabs_cat[idx_rep]:
                     cr1, cr2 = st.columns([3, 1])
@@ -813,6 +816,7 @@ elif st.session_state.usuario == "Cristian":
             elif st.session_state.sub_paso == 3:
                 st.header("Paso 3: Emisión de Documento")
                 
+                # ESCUDO ANTI-RETROCESO: Si el PDF se generó, esconder el botón volver.
                 if 'presupuesto_generado' not in st.session_state:
                     if st.button("⬅️ Volver al Carrito de Trabajos"):
                         st.session_state.sub_paso = 2
@@ -829,7 +833,7 @@ elif st.session_state.usuario == "Cristian":
                     
                     st.markdown("---")
                     if st.button("💾 GUARDAR Y GENERAR PDF", type="primary", use_container_width=True):
-                        with st.spinner("Conectando con Supabase y Generando Archivo..."):
+                        with st.spinner("Generando Archivo en la Nube..."):
                             try:
                                 if p_in:
                                     supabase.table("directorio_vehiculos").upsert({"patente": p_in, "rut_facturacion": st.session_state.c_rut_fac, "marca": st.session_state.c_marca, "modelo": st.session_state.c_modelo}).execute()
@@ -839,15 +843,15 @@ elif st.session_state.usuario == "Cristian":
                                     corr_id = str(sol_id)
                                     pdf_b = generar_pdf_oficial(p_in, st.session_state.c_marca, st.session_state.c_modelo, st.session_state.c_cli_fac, st.session_state.c_rut_fac, sel_final, tn, False, est, st.session_state.c_us_final, obs, corr_id, st.session_state.get('c_nsap', ''))
                                     n_pdf = f"Presupuesto_{corr_id}.pdf"
-                                    url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
                                     
+                                    url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
                                     if url_doc:
                                         supabase.table("historial_trabajos").update({
                                             "estado": "Generado", "total_clp": tf, "pdf_url": url_doc, 
                                             "origen_trabajo": st.session_state.c_origen, "usuario_final": st.session_state.c_us_final, "tarifa_aplicada": st.session_state.c_tarifa, "nombre_cliente_manual": st.session_state.c_cli_fac
                                         }).eq("id_cotizacion", sol_id).execute()
                                     else:
-                                        st.error("Error al subir archivo. Revisa si creaste la carpeta 'pdf_cotizaciones' como Pública en Storage.")
+                                        st.error("Archivo no guardado. Intenta nuevamente.")
                                         st.stop()
                                 else:
                                     res = supabase.table("historial_trabajos").insert({
@@ -858,12 +862,12 @@ elif st.session_state.usuario == "Cristian":
                                     corr_id = str(res.data[0]['id_cotizacion'])
                                     pdf_b = generar_pdf_oficial(p_in, st.session_state.c_marca, st.session_state.c_modelo, st.session_state.c_cli_fac, st.session_state.c_rut_fac, sel_final, tn, False, est, st.session_state.c_us_final, obs, corr_id, "")
                                     n_pdf = f"Presupuesto_{corr_id}.pdf"
-                                    url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
                                     
+                                    url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
                                     if url_doc:
                                         supabase.table("historial_trabajos").update({"pdf_url": url_doc}).eq("id_cotizacion", corr_id).execute()
                                     else:
-                                        st.error("Error al subir archivo. Revisa si creaste la carpeta 'pdf_cotizaciones' como Pública en Storage.")
+                                        st.error("Archivo no guardado. Intenta nuevamente.")
                                         st.stop()
                                     
                                 st.session_state['presupuesto_generado'] = {'pdf': pdf_b, 'nombre': n_pdf, 'url': url_doc}
@@ -872,11 +876,12 @@ elif st.session_state.usuario == "Cristian":
                             except Exception as e_gen: st.error(f"Error Crítico: {e_gen}")
                 else:
                     d = st.session_state['presupuesto_generado']
-                    st.success("✅ Documento Oficial guardado en Supabase.")
+                    st.success("✅ Documento Oficial guardado.")
                     
                     c_dl, c_lb = st.columns(2)
                     c_dl.download_button("📥 DESCARGAR PDF", d['pdf'], d['nombre'], "application/pdf", use_container_width=True)
-                    c_lb.link_button("👁️ ABRIR PDF EN EL NAVEGADOR", d['url'], use_container_width=True)
+                    if d.get('url'):
+                        c_lb.link_button("👁️ ABRIR PDF EN EL NAVEGADOR", d['url'], use_container_width=True)
                     
                     st.markdown("---")
                     with st.expander("✉️ Enviar por Correo Electrónico al Cliente", expanded=True):
@@ -901,7 +906,7 @@ elif st.session_state.usuario == "Cristian":
                                     sol_id = st.session_state.get('sol_activa')
                                     id_a_actualizar = sol_id if sol_id else int(num_pres)
                                     supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", id_a_actualizar).execute()
-                                    st.success("✅ Enviado exitosamente. Actualizando estado de la orden...")
+                                    st.success("✅ Enviado exitosamente. Actualizando bandeja...")
                                     time.sleep(1.5)
                                     limpiar_sesion_cristian()
                                     st.session_state.vista_taller = "Bandeja"
@@ -927,8 +932,11 @@ elif st.session_state.usuario == "Cristian":
                 for idx, r in df_todo[df_todo['estado'] == 'Generado'].iterrows():
                     ca, cb, cc = st.columns([4, 1.5, 1])
                     ca.write(f"📄 N° {r['id_cotizacion']} | Patente: {r['patente']} | Total: {format_clp(r['total_clp'])}")
-                    if pd.notna(r.get('pdf_url')): 
-                        cb.link_button("👁️ Ver PDF", r['pdf_url'])
+                    url_pdf = r.get('pdf_url')
+                    if pd.notna(url_pdf) and isinstance(url_pdf, str) and url_pdf.startswith('http'):
+                        cb.link_button("👁️ Ver PDF", url_pdf)
+                    else: cb.info("Sin Archivo")
+                        
                     if cc.button("✉️ Marcar Enviado", key=f"e_{r['id_cotizacion']}"):
                         supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
                         st.rerun()
@@ -936,17 +944,21 @@ elif st.session_state.usuario == "Cristian":
                 for idx, r in df_todo[df_todo['estado'] == 'Enviado'].iterrows():
                     ca, cb, cc = st.columns([4, 1.5, 1])
                     ca.write(f"🔵 N° {r['id_cotizacion']} | Patente: {r['patente']} | Total: {format_clp(r['total_clp'])}")
-                    if pd.notna(r.get('pdf_url')): 
-                        cb.link_button("👁️ Ver PDF", r['pdf_url'])
-                    cc.info("Esperando Aprobación de Gabo")
+                    url_pdf = r.get('pdf_url')
+                    if pd.notna(url_pdf) and isinstance(url_pdf, str) and url_pdf.startswith('http'):
+                        cb.link_button("👁️ Ver PDF", url_pdf)
+                    else: cb.info("Sin Archivo")
+                    cc.info("Esperando Aprobación")
             with t3:
                 df_apr = df_todo[df_todo['estado'] == 'Aprobado']
                 if not df_apr.empty:
                     for idx, r in df_apr.iterrows():
                         ca, cb, cc = st.columns([4, 1.5, 2])
                         ca.write(f"🟢 N° {r['id_cotizacion']} | Patente: {r['patente']} | Total: {format_clp(r['total_clp'])}")
-                        if pd.notna(r.get('pdf_url')): 
-                            cb.link_button("👁️ Ver PDF", r['pdf_url'])
+                        url_pdf = r.get('pdf_url')
+                        if pd.notna(url_pdf) and isinstance(url_pdf, str) and url_pdf.startswith('http'):
+                            cb.link_button("👁️ Ver PDF", url_pdf)
+                        else: cb.info("Sin Archivo")
                         if cc.button("🛠️ Marcar Realizado/Terminado", key=f"term_{r['id_cotizacion']}", type="primary"):
                             supabase.table("historial_trabajos").update({"estado": "Terminado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
                             st.success("¡Trabajo finalizado en Taller!"); time.sleep(1); st.rerun()
