@@ -165,9 +165,17 @@ class PDF(FPDF):
     def footer(self):
         self.set_y(-20)
         self.set_font('Arial', 'I', 8)
+        self.set_text_color(0, 0, 0)
         self.line(10, self.get_y(), 200, self.get_y())
         self.ln(2)
         self.cell(0, 4, f"Christian Alejandro Herrera Mardones | RUT: {RUT_EMPRESA} | {DIRECCION}", 0, 1, 'C')
+        
+        # MARCA DE AGUA DEL CREADOR (GPR)
+        self.set_y(-10)
+        self.set_font('Arial', 'I', 6)
+        self.set_text_color(200, 200, 200) # Gris muy claro
+        self.cell(0, 4, "Documento generado por sistema cotizaciones GPR", 0, 0, 'R')
+        self.set_text_color(0, 0, 0)
 
 def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, items, total_neto, is_official, estado_trabajo, usuario_final_txt, observaciones, correlativo, n_sap_txt=""):
     pdf = PDF(correlativo=correlativo, official=is_official)
@@ -316,7 +324,6 @@ def registrar_solicitud_gabo(patente, contacto, telefono, correo, origen, destin
             if modelo and modelo != "---": upsert_data["modelo"] = modelo
             supabase.table("directorio_vehiculos").upsert(upsert_data).execute()
         
-        # Insertar con fecha de creación
         supabase.table("historial_trabajos").insert({
             "patente": patente if patente else None,
             "origen_trabajo": origen, "usuario_final": destino_txt, "tarifa_aplicada": tarifa_math,
@@ -342,7 +349,7 @@ def extraer_historial_completo():
         return pd.DataFrame(res.data) if res.data else pd.DataFrame()
     except: return pd.DataFrame()
 
-def guardar_borrador():
+def guardar_borrador(*args, **kwargs):
     if not supabase or st.session_state.usuario != "Cristian": return
     datos = {
         'sol_activa': st.session_state.get('sol_activa'),
@@ -416,21 +423,28 @@ with st.sidebar:
     st.markdown(f"👤 Conectado: **{st.session_state.usuario}**")
     st.markdown("---")
     
-    if st.session_state.usuario == "Cristian":
-        if st.button("🏠 Inicio / Limpiar Todo", type="primary"): 
-            limpiar_sesion_cristian()
-            st.session_state.vista_taller = "Bandeja"
-            st.rerun()
-        if st.button("📥 Bandeja de Órdenes"): 
-            st.session_state.vista_taller = "Bandeja"
-            st.rerun()
-        if st.button("🚀 Nueva Cotización Libre"): 
-            limpiar_sesion_cristian()
-            st.session_state.vista_taller = "Cotizador"
-            st.session_state.sub_paso = 0 
-            st.rerun()
-        if st.button("🗂️ Historial General"): 
-            st.session_state.vista_taller = "Historial"
+    if st.session_state.usuario == "Cristian" or st.session_state.usuario == "Gabo":
+        if st.session_state.usuario == "Cristian":
+            if st.button("🏠 Inicio / Limpiar Todo", type="primary"): 
+                limpiar_sesion_cristian()
+                st.session_state.vista_taller = "Bandeja"
+                st.rerun()
+            if st.button("📥 Bandeja de Órdenes"): 
+                st.session_state.vista_taller = "Bandeja"
+                st.rerun()
+            if st.button("🚀 Nueva Cotización Libre"): 
+                limpiar_sesion_cristian()
+                st.session_state.vista_taller = "Cotizador"
+                st.session_state.sub_paso = 0 
+                st.rerun()
+            if st.button("🗂️ Historial General"): 
+                st.session_state.vista_taller = "Historial"
+                st.rerun()
+            st.markdown("---")
+        
+        # BOTÓN IA PARA AMBOS USUARIOS
+        if st.button("🤖 Cotizador IA (Beta)"):
+            st.session_state.vista_taller = "IA"
             st.rerun()
         st.markdown("---")
         
@@ -439,9 +453,17 @@ with st.sidebar:
         st.rerun()
 
 # ==========================================
-# 6. VISTA DE PLANIFICACIÓN (GABO) 
+# 6. VISTA DE CHATBOT IA (EN CONSTRUCCIÓN)
 # ==========================================
-if st.session_state.usuario == "Gabo":
+if st.session_state.get('vista_taller') == "IA":
+    st.title("🤖 Asistente de Cotizaciones con Inteligencia Artificial")
+    st.info("🚧 **Sección en Construcción:** Próximamente podrás generar cotizaciones completas simplemente escribiendo o dictando los síntomas del vehículo a nuestro asistente de IA integrado.")
+    st.markdown("---")
+
+# ==========================================
+# 7. VISTA DE PLANIFICACIÓN (GABO) 
+# ==========================================
+elif st.session_state.usuario == "Gabo":
     st.title("🎛️ Consola de Planificación (Gabo)")
     
     if 'g_vehiculo_existe' not in st.session_state: st.session_state.g_vehiculo_existe = False
@@ -547,7 +569,7 @@ if st.session_state.usuario == "Gabo":
         )
 
 # ==========================================
-# 7. VISTA OPERATIVA INTEGRADA (CRISTIAN) - FLUJO WIZARD
+# 8. VISTA OPERATIVA INTEGRADA (CRISTIAN) - FLUJO WIZARD
 # ==========================================
 elif st.session_state.usuario == "Cristian":
     
@@ -587,7 +609,6 @@ elif st.session_state.usuario == "Cristian":
                 for idx, fila in df_req.iterrows():
                     pat = fila['patente'] if pd.notna(fila['patente']) else 'S/P'
                     m_txt = ""
-                    # Rescatar la marca y modelo grabados en el historial
                     marca_hist = fila.get('marca')
                     mod_hist = fila.get('modelo')
                     
@@ -634,9 +655,9 @@ elif st.session_state.usuario == "Cristian":
         
         if st.session_state.sub_paso == 0:
             st.title("Nueva Cotización Libre")
-            pat_in = st.text_input("Ingresa la Patente (Opcional)").upper()
+            pat_in = st.text_input("Ingresa la Patente (Opcional)", on_change=guardar_borrador, key="c_patente_in").upper()
             if st.button("Iniciar Flujo ➡️", type="primary"):
-                st.session_state.c_patente = pat_in
+                st.session_state.c_patente = st.session_state.c_patente_in
                 st.session_state.c_origen = "Propio Cristian"
                 st.session_state.sub_paso = 1
                 guardar_borrador()
@@ -652,10 +673,9 @@ elif st.session_state.usuario == "Cristian":
                 st.header("Paso 1: Datos Administrativos y del Vehículo")
                 
                 idx_cli = 0 if st.session_state.get('c_origen')=="Kaufmann" else 1
-                origen_sel = st.selectbox("Cliente", ["Kaufmann", "Propio Cristian"], index=idx_cli)
-                st.session_state.c_origen = origen_sel
+                origen_sel = st.selectbox("Cliente", ["Kaufmann", "Propio Cristian"], index=idx_cli, on_change=guardar_borrador, key="c_origen")
                 
-                if origen_sel == "Kaufmann":
+                if st.session_state.c_origen == "Kaufmann":
                     st.session_state.c_cli_fac = "KAUFMANN S.A."
                     st.session_state.c_rut_fac = "92.475.000-6"
                 else:
@@ -668,21 +688,21 @@ elif st.session_state.usuario == "Cristian":
                     st.session_state.c_us_final = datos_v.get('cliente_final', '') if datos_v else ''
 
                 cf1, cf2 = st.columns(2)
-                st.session_state.c_cli_fac = cf1.text_input("Señor(es) (Facturación)", value=st.session_state.c_cli_fac)
-                st.session_state.c_rut_fac = cf2.text_input("RUT de Facturación", value=st.session_state.c_rut_fac)
-                st.session_state.c_us_final = st.text_input("Usuario Final / Destino (Texto para el PDF)", value=st.session_state.c_us_final)
+                st.text_input("Señor(es) (Facturación)", value=st.session_state.c_cli_fac, key="c_cli_fac", on_change=guardar_borrador)
+                st.text_input("RUT de Facturación", value=st.session_state.c_rut_fac, key="c_rut_fac", on_change=guardar_borrador)
+                st.text_input("Usuario Final / Destino (Texto para el PDF)", value=st.session_state.c_us_final, key="c_us_final", on_change=guardar_borrador)
                 
                 cv1, cv2 = st.columns(2)
-                
-                # Si viene de Gabo, usa lo guardado en session_state, si no, busca en directorio
                 marca_bd = st.session_state.get('c_marca') or (datos_v.get('marca') if datos_v else None)
                 idx_marca = list(CATALOGO.keys()).index(marca_bd) if marca_bd in CATALOGO else 0
-                st.session_state.c_marca = cv1.selectbox("Marca", list(CATALOGO.keys()), index=idx_marca)
+                st.session_state.c_marca = cv1.selectbox("Marca", list(CATALOGO.keys()), index=idx_marca, on_change=guardar_borrador, key="sel_marca")
+                st.session_state.c_marca = st.session_state.sel_marca
                 
                 mod_disp = CATALOGO[st.session_state.c_marca] if st.session_state.c_marca != "--- Seleccione Marca ---" else ["---"]
                 modelo_bd = st.session_state.get('c_modelo') or (datos_v.get('modelo') if datos_v else None)
                 idx_mod = mod_disp.index(modelo_bd) if modelo_bd in mod_disp else 0
-                st.session_state.c_modelo = cv2.selectbox("Modelo", mod_disp, index=idx_mod)
+                st.session_state.c_modelo = cv2.selectbox("Modelo", mod_disp, index=idx_mod, on_change=guardar_borrador, key="sel_modelo")
+                st.session_state.c_modelo = st.session_state.sel_modelo
                 
                 st.markdown("---")
                 if st.button("Continuar a Trabajos y Precios ➡️", type="primary"):
@@ -703,7 +723,7 @@ elif st.session_state.usuario == "Cristian":
                 idx_t = ops_tarifas.index(tarifa_default) if tarifa_default in ops_tarifas else 0
                 
                 is_disabled = True if (datos_v and datos_v.get('tipo_cliente')) else False
-                st.session_state.c_tarifa = st.selectbox("Tarifa Base Aplicada (Fórmula Interna)", ops_tarifas, index=idx_t, disabled=is_disabled)
+                st.selectbox("Tarifa Base Aplicada (Fórmula Interna)", ops_tarifas, index=idx_t, disabled=is_disabled, key="c_tarifa", on_change=guardar_borrador)
                 col_tarifa_a_buscar = MAPEO_TARIFAS.get(st.session_state.c_tarifa, "costo_ssas")
                 
                 sel_final = []
@@ -731,7 +751,7 @@ elif st.session_state.usuario == "Cristian":
                                 cc1, cc2, cc3 = st.columns([5.5, 1.5, 2], vertical_alignment="center")
                                 cc1.markdown(f"**{row['trabajo']}**")
                                 k = f"q_{row['trabajo']}_{idx}"
-                                qty = cc2.number_input("", 0, 20, value=st.session_state.get(k, 0), key=k, label_visibility="collapsed")
+                                qty = cc2.number_input("", 0, 20, value=st.session_state.get(k, 0), key=k, label_visibility="collapsed", on_change=guardar_borrador)
                                 p = float(row[col_tarifa_a_buscar])
                                 cc3.markdown(f"**{format_clp(p)}**")
                                 if qty > 0: 
@@ -841,7 +861,7 @@ elif st.session_state.usuario == "Cristian":
                     
                     st.markdown("---")
                     if st.button("💾 GUARDAR Y GENERAR PDF", type="primary", use_container_width=True):
-                        with st.spinner("Conectando con Supabase y Generando Archivo..."):
+                        with st.spinner("Generando Archivo en la Nube..."):
                             try:
                                 if p_in:
                                     supabase.table("directorio_vehiculos").upsert({"patente": p_in, "rut_facturacion": st.session_state.c_rut_fac, "marca": st.session_state.c_marca, "modelo": st.session_state.c_modelo}).execute()
@@ -941,26 +961,21 @@ elif st.session_state.usuario == "Cristian":
         if not df_todo.empty:
             df_view = df_todo.copy()
             
-            # FILTRO GLOBAL (Universal)
             lupa = st.text_input("🔍 Búsqueda Universal (Escribe patente, marca, cliente, ID, fecha o estado...)").upper()
             if lupa:
-                # Busca en todas las columnas convirtiéndolas a texto temporalmente
                 mask = df_view.astype(str).apply(lambda col: col.str.contains(lupa, case=False, na=False)).any(axis=1)
                 df_view = df_view[mask]
 
             st.markdown("---")
             st.subheader("📚 Todos los Registros")
             
-            # Formatear montos para la tabla global
             df_mostrar = df_view.copy()
             if 'total_clp' in df_mostrar.columns:
                 df_mostrar['total_clp'] = df_mostrar['total_clp'].apply(lambda x: format_clp(x) if pd.notna(x) else "")
             
-            # Orden de columnas visibles
             cols_to_show = ['id_cotizacion', 'fecha_creacion', 'patente', 'marca', 'modelo', 'nombre_cliente_manual', 'usuario_final', 'estado', 'total_clp', 'fecha_aprobacion', 'pdf_url']
             exist_cols = [c for c in cols_to_show if c in df_mostrar.columns]
             
-            # hide_index=True remueve la columna fea de números (0, 1, 2...)
             st.dataframe(
                 df_mostrar[exist_cols], 
                 column_config={"pdf_url": st.column_config.LinkColumn("Documento PDF", display_text="Abrir PDF")},
@@ -971,7 +986,6 @@ elif st.session_state.usuario == "Cristian":
             st.markdown("---")
             st.subheader("⚙️ Gestión de Órdenes Pendientes")
             
-            # Las pestañas ahora también respetan la búsqueda global de la lupa
             t1, t2, t3 = st.tabs(["🟡 Por Enviar", "🔵 Enviados", "🟢 Aprobados (Marcar Realizado)"])
             with t1:
                 df_gen = df_view[df_view['estado'] == 'Generado']
