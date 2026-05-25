@@ -34,7 +34,6 @@ except Exception as e:
     st.error(f"Error en enlace Supabase: {e}")
     supabase = None
 
-# Emojis para categorías
 EMOJIS_CAT = {
     "Climatización y Aire": "❄️", "Carrocería y Vidrios": "🚐", 
     "Interior Sanitario": "🏥", "Asientos y Tapiz": "💺", 
@@ -116,6 +115,9 @@ MAPEO_TARIFAS = {
 def format_clp(v): 
     try: return f"${float(v):,.0f}".replace(",", ".")
     except: return "$0"
+
+def get_fecha_hora_chile():
+    return pd.Timestamp.now('America/Santiago').strftime('%d/%m/%Y %H:%M')
 
 def enviar_correo(destinatario, asunto, mensaje_texto, pdf_bytes, nombre_archivo, email_reply):
     try:
@@ -314,11 +316,15 @@ def registrar_solicitud_gabo(patente, contacto, telefono, correo, origen, destin
             if modelo and modelo != "---": upsert_data["modelo"] = modelo
             supabase.table("directorio_vehiculos").upsert(upsert_data).execute()
         
+        # Insertar con fecha de creación
         supabase.table("historial_trabajos").insert({
             "patente": patente if patente else None,
             "origen_trabajo": origen, "usuario_final": destino_txt, "tarifa_aplicada": tarifa_math,
             "contacto_gestion": contacto, "descripcion_requerimiento": descripcion,
-            "estado": "Requerido", "creado_por": "Gabo", "n_sap": n_sap
+            "estado": "Requerido", "creado_por": "Gabo", "n_sap": n_sap,
+            "marca": marca if marca != "--- Seleccione Marca ---" else None, 
+            "modelo": modelo if modelo != "---" else None,
+            "fecha_creacion": get_fecha_hora_chile()
         }).execute()
         return True
     except Exception as e:
@@ -517,15 +523,11 @@ if st.session_state.usuario == "Gabo":
             for idx, r in df_enviadas.iterrows():
                 ca, cb, cc = st.columns([5, 1.5, 1.5])
                 ca.write(f"📄 N° {r['id_cotizacion']} | Patente: {r['patente']} | Total: {format_clp(r['total_clp'])}")
-                
-                url_pdf = r.get('pdf_url')
-                if pd.notna(url_pdf) and isinstance(url_pdf, str) and url_pdf.startswith('http'):
-                    cb.link_button("👁️ Ver PDF", url_pdf)
-                else:
-                    cb.info("Sin Archivo")
-                    
+                if pd.notna(r.get('pdf_url')): 
+                    cb.link_button("👁️ Ver PDF", r['pdf_url'])
                 if cc.button("✅ Aprobar Trabajo", key=f"apr_gb_{r['id_cotizacion']}", type="primary"):
-                    supabase.table("historial_trabajos").update({"estado": "Aprobado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
+                    fecha_aprob = get_fecha_hora_chile()
+                    supabase.table("historial_trabajos").update({"estado": "Aprobado", "fecha_aprobacion": fecha_aprob}).eq("id_cotizacion", r['id_cotizacion']).execute()
                     st.success("Trabajo Aprobado."); time.sleep(1); st.rerun()
         else: st.info("No hay cotizaciones pendientes de tu aprobación.")
         
@@ -534,13 +536,14 @@ if st.session_state.usuario == "Gabo":
         df_view = df_global.copy()
         if 'total_clp' in df_view.columns:
             df_view['total_clp'] = df_view['total_clp'].apply(lambda x: format_clp(x))
-        col_list = ['id_cotizacion', 'patente', 'usuario_final', 'estado', 'total_clp', 'pdf_url']
+        col_list = ['id_cotizacion', 'fecha_creacion', 'patente', 'marca', 'modelo', 'usuario_final', 'estado', 'total_clp', 'fecha_aprobacion', 'pdf_url']
         exist_cols = [c for c in col_list if c in df_view.columns]
         
         st.dataframe(
             df_view[exist_cols], 
             column_config={"pdf_url": st.column_config.LinkColumn("Documento PDF", display_text="Abrir Documento")},
-            use_container_width=True
+            use_container_width=True,
+            hide_index=True
         )
 
 # ==========================================
@@ -584,7 +587,13 @@ elif st.session_state.usuario == "Cristian":
                 for idx, fila in df_req.iterrows():
                     pat = fila['patente'] if pd.notna(fila['patente']) else 'S/P'
                     m_txt = ""
-                    if pat != 'S/P' and not df_dir.empty:
+                    # Rescatar la marca y modelo grabados en el historial
+                    marca_hist = fila.get('marca')
+                    mod_hist = fila.get('modelo')
+                    
+                    if pd.notna(marca_hist) and pd.notna(mod_hist):
+                        m_txt = f" | {marca_hist} {mod_hist}"
+                    elif pat != 'S/P' and not df_dir.empty:
                         match = df_dir[df_dir['patente'] == pat]
                         if not match.empty:
                             marca = match.iloc[0].get('marca', '')
@@ -594,7 +603,7 @@ elif st.session_state.usuario == "Cristian":
                     st.markdown(f"""
                     <div class="card-requerido">
                         <h4>📋 Orden N° {fila['id_cotizacion']} | Patente: {pat}{m_txt}</h4>
-                        <p><strong>Destino:</strong> {fila.get('usuario_final', '')}</p>
+                        <p><strong>Destino:</strong> {fila.get('usuario_final', '')} | <strong>Fecha:</strong> {fila.get('fecha_creacion', '')}</p>
                         <p><strong>Instrucciones:</strong> {fila['descripcion_requerimiento']}</p>
                     </div>
                     """, unsafe_allow_html=True)
@@ -612,8 +621,10 @@ elif st.session_state.usuario == "Cristian":
                         st.session_state.c_us_final = fila.get('usuario_final', '')
                         st.session_state.c_tarifa = fila.get('tarifa_aplicada', 'SSAS (Servicio Salud)')
                         st.session_state.c_nsap = fila.get('n_sap', '')
-                        st.session_state.vista_taller = "Cotizador"
+                        st.session_state.c_marca = marca_hist if pd.notna(marca_hist) else None
+                        st.session_state.c_modelo = mod_hist if pd.notna(mod_hist) else None
                         st.session_state.sub_paso = 1 
+                        st.session_state.vista_taller = "Cotizador"
                         guardar_borrador()
                         st.rerun()
             else: st.success("¡Excelente! No tienes solicitudes pendientes.")
@@ -662,13 +673,15 @@ elif st.session_state.usuario == "Cristian":
                 st.session_state.c_us_final = st.text_input("Usuario Final / Destino (Texto para el PDF)", value=st.session_state.c_us_final)
                 
                 cv1, cv2 = st.columns(2)
-                marca_db = st.session_state.get('c_marca', datos_v.get('marca') if datos_v else None)
-                idx_marca = list(CATALOGO.keys()).index(marca_db) if marca_db in CATALOGO else 0
+                
+                # Si viene de Gabo, usa lo guardado en session_state, si no, busca en directorio
+                marca_bd = st.session_state.get('c_marca') or (datos_v.get('marca') if datos_v else None)
+                idx_marca = list(CATALOGO.keys()).index(marca_bd) if marca_bd in CATALOGO else 0
                 st.session_state.c_marca = cv1.selectbox("Marca", list(CATALOGO.keys()), index=idx_marca)
                 
                 mod_disp = CATALOGO[st.session_state.c_marca] if st.session_state.c_marca != "--- Seleccione Marca ---" else ["---"]
-                modelo_db = st.session_state.get('c_modelo', datos_v.get('modelo') if datos_v else None)
-                idx_mod = mod_disp.index(modelo_db) if modelo_db in mod_disp else 0
+                modelo_bd = st.session_state.get('c_modelo') or (datos_v.get('modelo') if datos_v else None)
+                idx_mod = mod_disp.index(modelo_bd) if modelo_bd in mod_disp else 0
                 st.session_state.c_modelo = cv2.selectbox("Modelo", mod_disp, index=idx_mod)
                 
                 st.markdown("---")
@@ -695,7 +708,6 @@ elif st.session_state.usuario == "Cristian":
                 
                 sel_final = []
                 
-                # ADAPTACIÓN: SI LA TARIFA ES CLIENTE PARTICULAR, ESCONDER LA MATRIZ
                 if st.session_state.c_tarifa == "Cliente Particular":
                     cat_disp = []
                     tabs_cat = st.tabs(["📝 Manual", "🛒 Repuestos"])
@@ -707,7 +719,6 @@ elif st.session_state.usuario == "Cristian":
                     cat_disp = []
                     tabs_cat = st.tabs(["📝 Manual", "🛒 Repuestos"])
                 
-                # Renderizamos las pestañas de Matriz si existen
                 for i, cat in enumerate(cat_disp):
                     with tabs_cat[i]:
                         df_cat = DF_PRECIOS[DF_PRECIOS['categoria'] == cat].copy()
@@ -726,7 +737,6 @@ elif st.session_state.usuario == "Cristian":
                                 if qty > 0: 
                                     sel_final.append({"Tipo": "matriz", "Descripción": row['trabajo'], "Cantidad": qty, "Unitario_Costo": p, "Total_Costo": p * qty, "Llave": k})
                 
-                # PESTAÑA MANUAL
                 idx_manual = -2 if cat_disp else 0
                 with tabs_cat[idx_manual]:
                     cm1, cm2 = st.columns([6, 2], vertical_alignment="center")
@@ -751,7 +761,6 @@ elif st.session_state.usuario == "Cristian":
                                     st.session_state.lista_particular.append({"Tipo": "manual", "Descripción": hm['descripcion'], "Cantidad": 1, "Unitario_Costo": hm['costo'], "Total_Costo": hm['costo']})
                                     guardar_borrador(); st.rerun()
 
-                # PESTAÑA REPUESTOS
                 idx_rep = -1 if cat_disp else 1
                 with tabs_cat[idx_rep]:
                     cr1, cr2 = st.columns([3, 1])
@@ -816,7 +825,6 @@ elif st.session_state.usuario == "Cristian":
             elif st.session_state.sub_paso == 3:
                 st.header("Paso 3: Emisión de Documento")
                 
-                # ESCUDO ANTI-RETROCESO: Si el PDF se generó, esconder el botón volver.
                 if 'presupuesto_generado' not in st.session_state:
                     if st.button("⬅️ Volver al Carrito de Trabajos"):
                         st.session_state.sub_paso = 2
@@ -833,41 +841,47 @@ elif st.session_state.usuario == "Cristian":
                     
                     st.markdown("---")
                     if st.button("💾 GUARDAR Y GENERAR PDF", type="primary", use_container_width=True):
-                        with st.spinner("Generando Archivo en la Nube..."):
+                        with st.spinner("Conectando con Supabase y Generando Archivo..."):
                             try:
                                 if p_in:
                                     supabase.table("directorio_vehiculos").upsert({"patente": p_in, "rut_facturacion": st.session_state.c_rut_fac, "marca": st.session_state.c_marca, "modelo": st.session_state.c_modelo}).execute()
 
                                 sol_id = st.session_state.get('sol_activa')
+                                fecha_actual = get_fecha_hora_chile()
+                                pat_safe = p_in.replace("-", "").replace(" ", "") if p_in else "SP"
+                                
                                 if sol_id:
                                     corr_id = str(sol_id)
                                     pdf_b = generar_pdf_oficial(p_in, st.session_state.c_marca, st.session_state.c_modelo, st.session_state.c_cli_fac, st.session_state.c_rut_fac, sel_final, tn, False, est, st.session_state.c_us_final, obs, corr_id, st.session_state.get('c_nsap', ''))
-                                    n_pdf = f"Presupuesto_{corr_id}.pdf"
+                                    n_pdf = f"Presupuesto_{corr_id}_{pat_safe}.pdf"
                                     
                                     url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
                                     if url_doc:
                                         supabase.table("historial_trabajos").update({
                                             "estado": "Generado", "total_clp": tf, "pdf_url": url_doc, 
-                                            "origen_trabajo": st.session_state.c_origen, "usuario_final": st.session_state.c_us_final, "tarifa_aplicada": st.session_state.c_tarifa, "nombre_cliente_manual": st.session_state.c_cli_fac
+                                            "origen_trabajo": st.session_state.c_origen, "usuario_final": st.session_state.c_us_final, "tarifa_aplicada": st.session_state.c_tarifa, "nombre_cliente_manual": st.session_state.c_cli_fac,
+                                            "marca": st.session_state.c_marca, "modelo": st.session_state.c_modelo
                                         }).eq("id_cotizacion", sol_id).execute()
                                     else:
-                                        st.error("Archivo no guardado. Intenta nuevamente.")
+                                        st.error("Error al subir archivo. Revisa si creaste la carpeta 'pdf_cotizaciones' como Pública en Storage.")
                                         st.stop()
                                 else:
                                     res = supabase.table("historial_trabajos").insert({
                                         "patente": p_in if p_in else None, "origen_trabajo": st.session_state.c_origen, "nombre_cliente_manual": st.session_state.c_cli_fac,
                                         "usuario_final": st.session_state.c_us_final, "tarifa_aplicada": st.session_state.c_tarifa,
-                                        "estado": "Generado", "total_clp": tf, "creado_por": "Cristian"
+                                        "estado": "Generado", "total_clp": tf, "creado_por": "Cristian",
+                                        "marca": st.session_state.c_marca, "modelo": st.session_state.c_modelo,
+                                        "fecha_creacion": fecha_actual
                                     }).execute()
                                     corr_id = str(res.data[0]['id_cotizacion'])
                                     pdf_b = generar_pdf_oficial(p_in, st.session_state.c_marca, st.session_state.c_modelo, st.session_state.c_cli_fac, st.session_state.c_rut_fac, sel_final, tn, False, est, st.session_state.c_us_final, obs, corr_id, "")
-                                    n_pdf = f"Presupuesto_{corr_id}.pdf"
+                                    n_pdf = f"Presupuesto_{corr_id}_{pat_safe}.pdf"
                                     
                                     url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
                                     if url_doc:
                                         supabase.table("historial_trabajos").update({"pdf_url": url_doc}).eq("id_cotizacion", corr_id).execute()
                                     else:
-                                        st.error("Archivo no guardado. Intenta nuevamente.")
+                                        st.error("Error al subir archivo. Revisa si creaste la carpeta 'pdf_cotizaciones' como Pública en Storage.")
                                         st.stop()
                                     
                                 st.session_state['presupuesto_generado'] = {'pdf': pdf_b, 'nombre': n_pdf, 'url': url_doc}
@@ -876,7 +890,7 @@ elif st.session_state.usuario == "Cristian":
                             except Exception as e_gen: st.error(f"Error Crítico: {e_gen}")
                 else:
                     d = st.session_state['presupuesto_generado']
-                    st.success("✅ Documento Oficial guardado.")
+                    st.success("✅ Documento Oficial guardado en Supabase.")
                     
                     c_dl, c_lb = st.columns(2)
                     c_dl.download_button("📥 DESCARGAR PDF", d['pdf'], d['nombre'], "application/pdf", use_container_width=True)
@@ -889,7 +903,7 @@ elif st.session_state.usuario == "Cristian":
                         d_sel = st.multiselect("Contactos Frecuentes:", options=list(dir_c.keys()), default=[])
                         e_ad = st.text_input("Correos Adicionales (separados por coma):")
                         
-                        num_pres = d['nombre'].replace('Presupuesto_', '').replace('.pdf', '')
+                        num_pres = d['nombre'].replace('Presupuesto_', '').split('_')[0]
                         asunto_def = f"{p_in if p_in else 'S/P'} - {st.session_state.c_us_final} - Presupuesto {num_pres} - C.H. Servicio Automotriz"
                         e_as = st.text_input("Asunto:", value=asunto_def.upper())
                         
@@ -921,15 +935,47 @@ elif st.session_state.usuario == "Cristian":
                         st.rerun()
 
     elif st.session_state.vista_taller == "Historial":
-        st.title("🗃️ Registro General")
+        st.title("🗃️ Registro General e Historial")
         df_todo = extraer_historial_completo()
+        
         if not df_todo.empty:
-            lupa = st.text_input("🔍 Buscar por Patente...").upper()
-            if lupa: df_todo = df_todo[df_todo['patente'].str.contains(lupa, na=False)]
+            df_view = df_todo.copy()
             
+            # FILTRO GLOBAL (Universal)
+            lupa = st.text_input("🔍 Búsqueda Universal (Escribe patente, marca, cliente, ID, fecha o estado...)").upper()
+            if lupa:
+                # Busca en todas las columnas convirtiéndolas a texto temporalmente
+                mask = df_view.astype(str).apply(lambda col: col.str.contains(lupa, case=False, na=False)).any(axis=1)
+                df_view = df_view[mask]
+
+            st.markdown("---")
+            st.subheader("📚 Todos los Registros")
+            
+            # Formatear montos para la tabla global
+            df_mostrar = df_view.copy()
+            if 'total_clp' in df_mostrar.columns:
+                df_mostrar['total_clp'] = df_mostrar['total_clp'].apply(lambda x: format_clp(x) if pd.notna(x) else "")
+            
+            # Orden de columnas visibles
+            cols_to_show = ['id_cotizacion', 'fecha_creacion', 'patente', 'marca', 'modelo', 'nombre_cliente_manual', 'usuario_final', 'estado', 'total_clp', 'fecha_aprobacion', 'pdf_url']
+            exist_cols = [c for c in cols_to_show if c in df_mostrar.columns]
+            
+            # hide_index=True remueve la columna fea de números (0, 1, 2...)
+            st.dataframe(
+                df_mostrar[exist_cols], 
+                column_config={"pdf_url": st.column_config.LinkColumn("Documento PDF", display_text="Abrir PDF")},
+                use_container_width=True,
+                hide_index=True
+            )
+
+            st.markdown("---")
+            st.subheader("⚙️ Gestión de Órdenes Pendientes")
+            
+            # Las pestañas ahora también respetan la búsqueda global de la lupa
             t1, t2, t3 = st.tabs(["🟡 Por Enviar", "🔵 Enviados", "🟢 Aprobados (Marcar Realizado)"])
             with t1:
-                for idx, r in df_todo[df_todo['estado'] == 'Generado'].iterrows():
+                df_gen = df_view[df_view['estado'] == 'Generado']
+                for idx, r in df_gen.iterrows():
                     ca, cb, cc = st.columns([4, 1.5, 1])
                     ca.write(f"📄 N° {r['id_cotizacion']} | Patente: {r['patente']} | Total: {format_clp(r['total_clp'])}")
                     url_pdf = r.get('pdf_url')
@@ -941,16 +987,17 @@ elif st.session_state.usuario == "Cristian":
                         supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
                         st.rerun()
             with t2:
-                for idx, r in df_todo[df_todo['estado'] == 'Enviado'].iterrows():
+                df_env = df_view[df_view['estado'] == 'Enviado']
+                for idx, r in df_env.iterrows():
                     ca, cb, cc = st.columns([4, 1.5, 1])
                     ca.write(f"🔵 N° {r['id_cotizacion']} | Patente: {r['patente']} | Total: {format_clp(r['total_clp'])}")
                     url_pdf = r.get('pdf_url')
                     if pd.notna(url_pdf) and isinstance(url_pdf, str) and url_pdf.startswith('http'):
                         cb.link_button("👁️ Ver PDF", url_pdf)
                     else: cb.info("Sin Archivo")
-                    cc.info("Esperando Aprobación")
+                    cc.info("Esperando Aprobación de Gabo")
             with t3:
-                df_apr = df_todo[df_todo['estado'] == 'Aprobado']
+                df_apr = df_view[df_view['estado'] == 'Aprobado']
                 if not df_apr.empty:
                     for idx, r in df_apr.iterrows():
                         ca, cb, cc = st.columns([4, 1.5, 2])
@@ -962,15 +1009,3 @@ elif st.session_state.usuario == "Cristian":
                         if cc.button("🛠️ Marcar Realizado/Terminado", key=f"term_{r['id_cotizacion']}", type="primary"):
                             supabase.table("historial_trabajos").update({"estado": "Terminado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
                             st.success("¡Trabajo finalizado en Taller!"); time.sleep(1); st.rerun()
-                
-                st.markdown("---")
-                st.markdown("### Trabajos Históricos (Terminados)")
-                df_fin = df_todo[df_todo['estado'] == 'Terminado'].copy()
-                if not df_fin.empty:
-                    df_fin['total_clp'] = df_fin['total_clp'].apply(lambda x: format_clp(x))
-                    exist_cols = [c for c in ['id_cotizacion', 'patente', 'usuario_final', 'estado', 'total_clp', 'pdf_url'] if c in df_fin.columns]
-                    st.dataframe(
-                        df_fin[exist_cols], 
-                        column_config={"pdf_url": st.column_config.LinkColumn("Documento PDF", display_text="Abrir Documento")},
-                        use_container_width=True
-                    )
