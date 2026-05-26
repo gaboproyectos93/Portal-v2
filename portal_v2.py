@@ -3,6 +3,8 @@ import pandas as pd
 import io
 import os
 import time 
+import tempfile
+from PIL import Image
 from fpdf import FPDF
 from datetime import datetime
 import smtplib
@@ -34,7 +36,6 @@ except Exception as e:
     st.error(f"Error en enlace Supabase: {e}")
     supabase = None
 
-# Emojis para categorías
 EMOJIS_CAT = {
     "Climatización y Aire": "❄️", "Carrocería y Vidrios": "🚐", 
     "Interior Sanitario": "🏥", "Asientos y Tapiz": "💺", 
@@ -120,6 +121,13 @@ def format_clp(v):
 def get_fecha_hora_chile():
     return pd.Timestamp.now('America/Santiago').strftime('%d/%m/%Y %H:%M')
 
+def formatear_patente(patente):
+    pat_str = str(patente).upper().strip() if patente else "S/P"
+    if pat_str != "S/P":
+        p_clean = pat_str.replace("-", "").replace(" ", "")
+        if len(p_clean) > 2: return f"{p_clean[:2]}-{p_clean[2:]}"
+    return pat_str
+
 def enviar_correo(destinatario, asunto, mensaje_texto, pdf_bytes, nombre_archivo, email_reply):
     try:
         remitente_sistema = st.secrets["email"]["user"]
@@ -165,7 +173,7 @@ class PDF(FPDF):
         self.set_x(130)
         self.set_font('Arial', 'B', 12)
         txt_head = f"N° {self.correlativo}"
-        if self.patente and self.patente != "SIN PATENTE":
+        if self.patente and self.patente != "S/P":
             txt_head += f" | {self.patente}"
         self.cell(70, 10, txt_head, 'LBR', 1, 'C')
         
@@ -186,11 +194,8 @@ class PDF(FPDF):
         self.cell(0, 4, "Documento generado por sistema cotizaciones GPR", 0, 0, 'R')
         self.set_text_color(0, 0, 0)
 
-def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, items, total_neto, is_official, estado_trabajo, usuario_final_txt, observaciones, correlativo, n_sap_txt=""):
-    pat_str = str(patente).upper() if patente else "SIN PATENTE"
-    if pat_str != "SIN PATENTE":
-        p_clean = pat_str.replace("-", "").replace(" ", "")
-        if len(p_clean) > 2: pat_str = f"{p_clean[:2]}-{p_clean[2:]}"
+def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, items, total_neto, is_official, estado_trabajo, usuario_final_txt, observaciones, correlativo, n_sap_txt="", fotos_subidas=None):
+    pat_str = formatear_patente(patente)
         
     pdf = PDF(correlativo=correlativo, patente=pat_str, official=is_official)
     pdf.add_page()
@@ -295,6 +300,43 @@ def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, ite
         pdf.set_font('Arial', '', 9)
         pdf.multi_cell(0, 5, str(observaciones), 0, 'L')
         
+    # --- MÓDULO FOTOGRÁFICO ---
+    if fotos_subidas:
+        pdf.add_page()
+        pdf.set_font('Arial', 'B', 10)
+        pdf.set_fill_color(10, 37, 64)
+        pdf.set_text_color(255, 255, 255)
+        pdf.cell(190, 8, "  EVIDENCIA FOTOGRÁFICA", 1, 1, 'L', 1)
+        pdf.set_text_color(0, 0, 0)
+        pdf.ln(5)
+        
+        for foto in fotos_subidas:
+            try:
+                img = Image.open(foto)
+                if img.mode in ('RGBA', 'P'): img = img.convert('RGB')
+                
+                # Compresión inteligente para no saturar Supabase
+                img.thumbnail((800, 800), Image.Resampling.LANCZOS)
+                ratio = img.height / img.width
+                
+                pdf_w = 140
+                pdf_h = pdf_w * ratio
+                
+                # Si no cabe en la hoja actual, salta a la siguiente
+                if pdf.get_y() + pdf_h > 270:
+                    pdf.add_page()
+                    
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
+                    img.save(tmp.name, format="JPEG", quality=80)
+                    tmp_path = tmp.name
+                    
+                # Centrado horizontal: (210 - 140) / 2 = 35
+                pdf.image(tmp_path, x=35, y=pdf.get_y(), w=pdf_w)
+                pdf.set_y(pdf.get_y() + pdf_h + 10)
+                os.remove(tmp_path)
+            except Exception as e:
+                print(f"Error insertando imagen en PDF: {e}")
+
     pdf.ln(15)
     pdf.set_text_color(0, 0, 0)
     pdf.cell(0, 6, f"Padre las Casas, {datetime.now().strftime('%d-%m-%Y')}", 0, 1, 'C')
@@ -507,7 +549,7 @@ elif st.session_state.usuario == "Gabo" and st.session_state.get('vista_gabo') !
             if not df_enviadas.empty:
                 for idx, r in df_enviadas.iterrows():
                     ca, cb, cc = st.columns([5, 1.5, 1.5])
-                    ca.write(f"📄 N° {r['id_cotizacion']} | Patente: {r['patente']} | Total: {format_clp(r['total_clp'])}")
+                    ca.write(f"📄 N° {r['id_cotizacion']} | Patente: {formatear_patente(r['patente'])} | Total: {format_clp(r['total_clp'])}")
                     if pd.notna(r.get('pdf_url')): 
                         cb.link_button("👁️ Ver PDF", r['pdf_url'])
                     if cc.button("✅ Aprobar Trabajo", key=f"apr_gb_{r['id_cotizacion']}", type="primary"):
@@ -520,6 +562,9 @@ elif st.session_state.usuario == "Gabo" and st.session_state.get('vista_gabo') !
             st.subheader("📊 Trazabilidad Global Kaufmann")
             if 'total_clp' in df_gabo.columns:
                 df_gabo['total_clp'] = df_gabo['total_clp'].apply(lambda x: format_clp(x))
+            if 'patente' in df_gabo.columns:
+                df_gabo['patente'] = df_gabo['patente'].apply(lambda x: formatear_patente(x))
+                
             col_list = ['id_cotizacion', 'fecha_creacion', 'patente', 'marca', 'modelo', 'usuario_final', 'estado', 'total_clp', 'fecha_aprobacion', 'pdf_url']
             exist_cols = [c for c in col_list if c in df_gabo.columns]
             
@@ -619,7 +664,7 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
             st.session_state.hay_borrador = datos_recuperados
             
     if st.session_state.get('hay_borrador'):
-        st.markdown(f"""<div class="card-borrador"><h4>⚠️ Tienes una cotización en pausa (Patente: {st.session_state.hay_borrador.get('c_patente', 'S/P')})</h4></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="card-borrador"><h4>⚠️ Tienes una cotización en pausa (Patente: {formatear_patente(st.session_state.hay_borrador.get('c_patente'))})</h4></div>""", unsafe_allow_html=True)
         c_a, c_b = st.columns(2)
         if c_a.button("✅ Recuperar Trabajo", use_container_width=True):
             b = st.session_state.hay_borrador
@@ -662,7 +707,7 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                     
                     st.markdown(f"""
                     <div class="card-requerido">
-                        <h4>📋 Orden N° {fila['id_cotizacion']} | Patente: {pat}{m_txt}</h4>
+                        <h4>📋 Orden N° {fila['id_cotizacion']} | Patente: {formatear_patente(pat)}{m_txt}</h4>
                         <p><strong>Destino:</strong> {fila.get('usuario_final', '')} | <strong>Fecha:</strong> {fila.get('fecha_creacion', '')}</p>
                         <p><strong>Instrucciones:</strong> {fila['descripcion_requerimiento']}</p>
                     </div>
@@ -707,7 +752,6 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
             p_in = st.session_state.get('c_patente', '')
             datos_v = buscar_vehiculo_en_directorio(p_in) if p_in else None
 
-            # PASO 1: DATOS ADMINISTRATIVOS SEGUROS
             if st.session_state.sub_paso == 1:
                 st.header("Paso 1: Datos Administrativos y del Vehículo")
                 
@@ -728,7 +772,6 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                 v_rut = cf2.text_input("RUT de Facturación", value=def_rut)
                 v_us_final = st.text_input("Usuario Final / Destino (Texto para el PDF)", value=def_us_final)
                 
-                # Inyectamos en memoria de inmediato para que nunca se pierdan
                 st.session_state['c_cli_fac'] = v_cli
                 st.session_state['c_rut_fac'] = v_rut
                 st.session_state['c_us_final'] = v_us_final
@@ -752,7 +795,6 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                     guardar_borrador()
                     st.rerun()
 
-            # PASO 2: TABS DE PRECIOS
             elif st.session_state.sub_paso == 2:
                 if st.button("⬅️ Volver a Datos Administrativos"):
                     st.session_state.sub_paso = 1
@@ -902,13 +944,13 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                     tf = tn + iv
                     
                     obs = st.text_area("Observaciones para el Taller/Cliente:")
+                    fotos_in = st.file_uploader("📸 Adjuntar Evidencia Fotográfica (Opcional)", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
                     est = st.radio("Fase del Trabajo:", ("En Espera de Aprobación", "Trabajo Realizado"))
                     
                     st.markdown("---")
                     if st.button("💾 GUARDAR Y GENERAR PDF", type="primary", use_container_width=True):
-                        with st.spinner("Generando Archivo en la Nube..."):
+                        with st.spinner("Generando Archivo en la Nube con Evidencia..."):
                             try:
-                                # Capturar valores seguros con .get()
                                 c_rut_fac_val = st.session_state.get('c_rut_fac', '')
                                 c_cli_fac_val = st.session_state.get('c_cli_fac', '')
                                 c_marca_val = st.session_state.get('c_marca', '--- Seleccione Marca ---')
@@ -927,7 +969,7 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                                 
                                 if sol_id:
                                     corr_id = str(sol_id)
-                                    pdf_b = generar_pdf_oficial(p_in, c_marca_val, c_modelo_val, c_cli_fac_val, c_rut_fac_val, sel_final, tn, False, est, c_us_final_val, obs, corr_id, c_nsap_val)
+                                    pdf_b = generar_pdf_oficial(p_in, c_marca_val, c_modelo_val, c_cli_fac_val, c_rut_fac_val, sel_final, tn, False, est, c_us_final_val, obs, corr_id, c_nsap_val, fotos_in)
                                     n_pdf = f"Presupuesto_{corr_id}_{pat_safe}.pdf"
                                     
                                     url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
@@ -949,7 +991,7 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                                         "fecha_creacion": fecha_actual
                                     }).execute()
                                     corr_id = str(res.data[0]['id_cotizacion'])
-                                    pdf_b = generar_pdf_oficial(p_in, c_marca_val, c_modelo_val, c_cli_fac_val, c_rut_fac_val, sel_final, tn, False, est, c_us_final_val, obs, corr_id, "")
+                                    pdf_b = generar_pdf_oficial(p_in, c_marca_val, c_modelo_val, c_cli_fac_val, c_rut_fac_val, sel_final, tn, False, est, c_us_final_val, obs, corr_id, "", fotos_in)
                                     n_pdf = f"Presupuesto_{corr_id}_{pat_safe}.pdf"
                                     
                                     url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
@@ -977,10 +1019,12 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                         
                         num_pres = d['nombre'].replace('Presupuesto_', '').split('_')[0]
                         c_us_final_val = st.session_state.get('c_us_final', '')
-                        asunto_def = f"{p_in if p_in else 'S/P'} - {c_us_final_val} - Presupuesto {num_pres} - C.H. Servicio Automotriz"
+                        pat_formateada = formatear_patente(p_in)
+                        
+                        asunto_def = f"{pat_formateada} - {c_us_final_val} - Presupuesto {num_pres} - C.H. Servicio Automotriz"
                         e_as = st.text_input("Asunto:", value=asunto_def.upper())
                         
-                        e_ms = st.text_area("Mensaje:", value=f"Estimado(a),\n\nAdjunto enviamos el presupuesto solicitado para la patente {p_in if p_in else 'N/A'}.\n\nSaludos cordiales.")
+                        e_ms = st.text_area("Mensaje:", value=f"Estimado(a),\n\nAdjunto enviamos el presupuesto solicitado para la patente {pat_formateada}.\n\nSaludos cordiales.")
                         
                         if st.session_state.get('c_origen', '') == "Kaufmann":
                             dir_c = cargar_directorio_correos()
@@ -1048,7 +1092,9 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
             df_mostrar = df_view.copy()
             if 'total_clp' in df_mostrar.columns:
                 df_mostrar['total_clp'] = df_mostrar['total_clp'].apply(lambda x: format_clp(x) if pd.notna(x) else "")
-            
+            if 'patente' in df_mostrar.columns:
+                df_mostrar['patente'] = df_mostrar['patente'].apply(lambda x: formatear_patente(x))
+                
             cols_to_show = ['id_cotizacion', 'fecha_creacion', 'patente', 'marca', 'modelo', 'nombre_cliente_manual', 'usuario_final', 'estado', 'total_clp', 'fecha_aprobacion', 'pdf_url']
             exist_cols = [c for c in cols_to_show if c in df_mostrar.columns]
             
@@ -1067,7 +1113,7 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                 df_gen = df_view[df_view['estado'] == 'Generado']
                 for idx, r in df_gen.iterrows():
                     ca, cb, cc = st.columns([4, 1.5, 1])
-                    ca.write(f"📄 N° {r['id_cotizacion']} | Patente: {r['patente']} | Total: {format_clp(r['total_clp'])}")
+                    ca.write(f"📄 N° {r['id_cotizacion']} | Patente: {formatear_patente(r['patente'])} | Total: {format_clp(r['total_clp'])}")
                     url_pdf = r.get('pdf_url')
                     if pd.notna(url_pdf) and isinstance(url_pdf, str) and url_pdf.startswith('http'):
                         cb.link_button("👁️ Ver PDF", url_pdf)
@@ -1080,18 +1126,18 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                 df_env = df_view[df_view['estado'] == 'Enviado']
                 for idx, r in df_env.iterrows():
                     ca, cb, cc = st.columns([4, 1.5, 1])
-                    ca.write(f"🔵 N° {r['id_cotizacion']} | Patente: {r['patente']} | Total: {format_clp(r['total_clp'])}")
+                    ca.write(f"🔵 N° {r['id_cotizacion']} | Patente: {formatear_patente(r['patente'])} | Total: {format_clp(r['total_clp'])}")
                     url_pdf = r.get('pdf_url')
                     if pd.notna(url_pdf) and isinstance(url_pdf, str) and url_pdf.startswith('http'):
                         cb.link_button("👁️ Ver PDF", url_pdf)
                     else: cb.info("Sin Archivo")
-                    cc.info("Esperando Aprobación de Gabo")
+                    cc.info("Esperando Aprobación")
             with t3:
                 df_apr = df_view[df_view['estado'] == 'Aprobado']
                 if not df_apr.empty:
                     for idx, r in df_apr.iterrows():
                         ca, cb, cc = st.columns([4, 1.5, 2])
-                        ca.write(f"🟢 N° {r['id_cotizacion']} | Patente: {r['patente']} | Total: {format_clp(r['total_clp'])}")
+                        ca.write(f"🟢 N° {r['id_cotizacion']} | Patente: {formatear_patente(r['patente'])} | Total: {format_clp(r['total_clp'])}")
                         url_pdf = r.get('pdf_url')
                         if pd.notna(url_pdf) and isinstance(url_pdf, str) and url_pdf.startswith('http'):
                             cb.link_button("👁️ Ver PDF", url_pdf)
