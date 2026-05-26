@@ -704,44 +704,47 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
 
         else:
             st.progress(st.session_state.sub_paso / 3.0)
-            
             p_in = st.session_state.get('c_patente', '')
             datos_v = buscar_vehiculo_en_directorio(p_in) if p_in else None
 
+            # PASO 1: DATOS ADMINISTRATIVOS SEGUROS
             if st.session_state.sub_paso == 1:
                 st.header("Paso 1: Datos Administrativos y del Vehículo")
                 
                 idx_cli = 0 if st.session_state.get('c_origen')=="Kaufmann" else 1
-                origen_sel = st.selectbox("Cliente", ["Kaufmann", "Propio Cristian"], index=idx_cli, on_change=guardar_borrador, key="c_origen")
+                v_origen = st.selectbox("Cliente", ["Kaufmann", "Propio Cristian"], index=idx_cli)
                 
-                if st.session_state.c_origen == "Kaufmann":
-                    st.session_state.c_cli_fac = "KAUFMANN S.A."
-                    st.session_state.c_rut_fac = "92.475.000-6"
+                if v_origen == "Kaufmann":
+                    def_cli = "KAUFMANN S.A."
+                    def_rut = "92.475.000-6"
                 else:
-                    if 'c_cli_fac' not in st.session_state:
-                        st.session_state.c_cli_fac = datos_v.get('nombre_contacto', '') if datos_v else ""
-                    if 'c_rut_fac' not in st.session_state:
-                        st.session_state.c_rut_fac = datos_v.get('rut_facturacion', '') if datos_v else ""
+                    def_cli = st.session_state.get('c_cli_fac') or (datos_v.get('nombre_contacto', '') if datos_v else "")
+                    def_rut = st.session_state.get('c_rut_fac') or (datos_v.get('rut_facturacion', '') if datos_v else "")
 
-                if 'c_us_final' not in st.session_state:
-                    st.session_state.c_us_final = datos_v.get('cliente_final', '') if datos_v else ''
+                def_us_final = st.session_state.get('c_us_final') or (datos_v.get('cliente_final', '') if datos_v else '')
 
                 cf1, cf2 = st.columns(2)
-                st.text_input("Señor(es) (Facturación)", value=st.session_state.c_cli_fac, key="c_cli_fac", on_change=guardar_borrador)
-                st.text_input("RUT de Facturación", value=st.session_state.c_rut_fac, key="c_rut_fac", on_change=guardar_borrador)
-                st.text_input("Usuario Final / Destino (Texto para el PDF)", value=st.session_state.c_us_final, key="c_us_final", on_change=guardar_borrador)
+                v_cli = cf1.text_input("Señor(es) (Facturación)", value=def_cli)
+                v_rut = cf2.text_input("RUT de Facturación", value=def_rut)
+                v_us_final = st.text_input("Usuario Final / Destino (Texto para el PDF)", value=def_us_final)
+                
+                # Inyectamos en memoria de inmediato para que nunca se pierdan
+                st.session_state['c_cli_fac'] = v_cli
+                st.session_state['c_rut_fac'] = v_rut
+                st.session_state['c_us_final'] = v_us_final
+                st.session_state['c_origen'] = v_origen
                 
                 cv1, cv2 = st.columns(2)
                 marca_bd = st.session_state.get('c_marca') or (datos_v.get('marca') if datos_v else None)
                 idx_marca = list(CATALOGO.keys()).index(marca_bd) if marca_bd in CATALOGO else 0
-                st.session_state.c_marca = cv1.selectbox("Marca", list(CATALOGO.keys()), index=idx_marca, on_change=guardar_borrador, key="sel_marca")
-                st.session_state.c_marca = st.session_state.sel_marca
+                v_marca = cv1.selectbox("Marca", list(CATALOGO.keys()), index=idx_marca)
+                st.session_state['c_marca'] = v_marca
                 
-                mod_disp = CATALOGO[st.session_state.c_marca] if st.session_state.c_marca != "--- Seleccione Marca ---" else ["---"]
+                mod_disp = CATALOGO[v_marca] if v_marca != "--- Seleccione Marca ---" else ["---"]
                 modelo_bd = st.session_state.get('c_modelo') or (datos_v.get('modelo') if datos_v else None)
                 idx_mod = mod_disp.index(modelo_bd) if modelo_bd in mod_disp else 0
-                st.session_state.c_modelo = cv2.selectbox("Modelo", mod_disp, index=idx_mod, on_change=guardar_borrador, key="sel_modelo")
-                st.session_state.c_modelo = st.session_state.sel_modelo
+                v_modelo = cv2.selectbox("Modelo", mod_disp, index=idx_mod)
+                st.session_state['c_modelo'] = v_modelo
                 
                 st.markdown("---")
                 if st.button("Continuar a Trabajos y Precios ➡️", type="primary"):
@@ -749,6 +752,7 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                     guardar_borrador()
                     st.rerun()
 
+            # PASO 2: TABS DE PRECIOS
             elif st.session_state.sub_paso == 2:
                 if st.button("⬅️ Volver a Datos Administrativos"):
                     st.session_state.sub_paso = 1
@@ -758,16 +762,18 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                 st.header("Paso 2: Valorización de Trabajos")
                 
                 ops_tarifas = ["SSAS (Servicio Salud)", "SAMU", "Hospital Temuco", "Hospital Villarrica", "Hospital Lautaro", "Hospital Pitrufquen", "Gendarmería de Chile", "Cliente Particular"]
-                tarifa_default = st.session_state.get('c_tarifa') if st.session_state.get('c_tarifa') else datos_v.get('tipo_cliente') if datos_v else "SSAS (Servicio Salud)"
+                tarifa_default = st.session_state.get('c_tarifa') if st.session_state.get('c_tarifa') else (datos_v.get('tipo_cliente') if datos_v else "SSAS (Servicio Salud)")
                 idx_t = ops_tarifas.index(tarifa_default) if tarifa_default in ops_tarifas else 0
                 
                 is_disabled = True if (datos_v and datos_v.get('tipo_cliente')) else False
-                st.selectbox("Tarifa Base Aplicada (Fórmula Interna)", ops_tarifas, index=idx_t, disabled=is_disabled, key="c_tarifa", on_change=guardar_borrador)
-                col_tarifa_a_buscar = MAPEO_TARIFAS.get(st.session_state.c_tarifa, "costo_ssas")
+                v_tarifa = st.selectbox("Tarifa Base Aplicada (Fórmula Interna)", ops_tarifas, index=idx_t, disabled=is_disabled)
+                st.session_state['c_tarifa'] = v_tarifa
+                
+                col_tarifa_a_buscar = MAPEO_TARIFAS.get(v_tarifa, "costo_ssas")
                 
                 sel_final = []
                 
-                if st.session_state.c_tarifa == "Cliente Particular":
+                if v_tarifa == "Cliente Particular":
                     cat_disp = []
                     tabs_cat = st.tabs(["📝 Manual", "🛒 Repuestos"])
                 elif not DF_PRECIOS.empty and 'categoria' in DF_PRECIOS.columns:
@@ -790,7 +796,7 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                                 cc1, cc2, cc3 = st.columns([5.5, 1.5, 2], vertical_alignment="center")
                                 cc1.markdown(f"**{row['trabajo']}**")
                                 k = f"q_{row['trabajo']}_{idx}"
-                                qty = cc2.number_input("", 0, 20, value=st.session_state.get(k, 0), key=k, label_visibility="collapsed", on_change=guardar_borrador)
+                                qty = cc2.number_input("", 0, 20, value=st.session_state.get(k, 0), key=k, label_visibility="collapsed")
                                 p = float(row[col_tarifa_a_buscar])
                                 cc3.markdown(f"**{format_clp(p)}**")
                                 if qty > 0: 
@@ -902,8 +908,18 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                     if st.button("💾 GUARDAR Y GENERAR PDF", type="primary", use_container_width=True):
                         with st.spinner("Generando Archivo en la Nube..."):
                             try:
+                                # Capturar valores seguros con .get()
+                                c_rut_fac_val = st.session_state.get('c_rut_fac', '')
+                                c_cli_fac_val = st.session_state.get('c_cli_fac', '')
+                                c_marca_val = st.session_state.get('c_marca', '--- Seleccione Marca ---')
+                                c_modelo_val = st.session_state.get('c_modelo', '---')
+                                c_us_final_val = st.session_state.get('c_us_final', '')
+                                c_origen_val = st.session_state.get('c_origen', 'Kaufmann')
+                                c_tarifa_val = st.session_state.get('c_tarifa', 'Cliente Particular')
+                                c_nsap_val = st.session_state.get('c_nsap', '')
+
                                 if p_in:
-                                    supabase.table("directorio_vehiculos").upsert({"patente": p_in, "rut_facturacion": st.session_state.c_rut_fac, "marca": st.session_state.c_marca, "modelo": st.session_state.c_modelo}).execute()
+                                    supabase.table("directorio_vehiculos").upsert({"patente": p_in, "rut_facturacion": c_rut_fac_val, "marca": c_marca_val, "modelo": c_modelo_val}).execute()
 
                                 sol_id = st.session_state.get('sol_activa')
                                 fecha_actual = get_fecha_hora_chile()
@@ -911,29 +927,29 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                                 
                                 if sol_id:
                                     corr_id = str(sol_id)
-                                    pdf_b = generar_pdf_oficial(p_in, st.session_state.c_marca, st.session_state.c_modelo, st.session_state.c_cli_fac, st.session_state.c_rut_fac, sel_final, tn, False, est, st.session_state.c_us_final, obs, corr_id, st.session_state.get('c_nsap', ''))
+                                    pdf_b = generar_pdf_oficial(p_in, c_marca_val, c_modelo_val, c_cli_fac_val, c_rut_fac_val, sel_final, tn, False, est, c_us_final_val, obs, corr_id, c_nsap_val)
                                     n_pdf = f"Presupuesto_{corr_id}_{pat_safe}.pdf"
                                     
                                     url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
                                     if url_doc:
                                         supabase.table("historial_trabajos").update({
                                             "estado": "Generado", "total_clp": tf, "pdf_url": url_doc, 
-                                            "origen_trabajo": st.session_state.c_origen, "usuario_final": st.session_state.c_us_final, "tarifa_aplicada": st.session_state.c_tarifa, "nombre_cliente_manual": st.session_state.c_cli_fac,
-                                            "marca": st.session_state.c_marca, "modelo": st.session_state.c_modelo
+                                            "origen_trabajo": c_origen_val, "usuario_final": c_us_final_val, "tarifa_aplicada": c_tarifa_val, "nombre_cliente_manual": c_cli_fac_val,
+                                            "marca": c_marca_val, "modelo": c_modelo_val
                                         }).eq("id_cotizacion", sol_id).execute()
                                     else:
                                         st.error("Error al subir archivo. Revisa permisos en Storage.")
                                         st.stop()
                                 else:
                                     res = supabase.table("historial_trabajos").insert({
-                                        "patente": p_in if p_in else None, "origen_trabajo": st.session_state.c_origen, "nombre_cliente_manual": st.session_state.c_cli_fac,
-                                        "usuario_final": st.session_state.c_us_final, "tarifa_aplicada": st.session_state.c_tarifa,
+                                        "patente": p_in if p_in else None, "origen_trabajo": c_origen_val, "nombre_cliente_manual": c_cli_fac_val,
+                                        "usuario_final": c_us_final_val, "tarifa_aplicada": c_tarifa_val,
                                         "estado": "Generado", "total_clp": tf, "creado_por": "Cristian",
-                                        "marca": st.session_state.c_marca, "modelo": st.session_state.c_modelo,
+                                        "marca": c_marca_val, "modelo": c_modelo_val,
                                         "fecha_creacion": fecha_actual
                                     }).execute()
                                     corr_id = str(res.data[0]['id_cotizacion'])
-                                    pdf_b = generar_pdf_oficial(p_in, st.session_state.c_marca, st.session_state.c_modelo, st.session_state.c_cli_fac, st.session_state.c_rut_fac, sel_final, tn, False, est, st.session_state.c_us_final, obs, corr_id, "")
+                                    pdf_b = generar_pdf_oficial(p_in, c_marca_val, c_modelo_val, c_cli_fac_val, c_rut_fac_val, sel_final, tn, False, est, c_us_final_val, obs, corr_id, "")
                                     n_pdf = f"Presupuesto_{corr_id}_{pat_safe}.pdf"
                                     
                                     url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
@@ -960,12 +976,13 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                     with st.expander("✉️ Enviar por Correo Electrónico al Cliente", expanded=True):
                         
                         num_pres = d['nombre'].replace('Presupuesto_', '').split('_')[0]
-                        asunto_def = f"{p_in if p_in else 'S/P'} - {st.session_state.c_us_final} - Presupuesto {num_pres} - C.H. Servicio Automotriz"
+                        c_us_final_val = st.session_state.get('c_us_final', '')
+                        asunto_def = f"{p_in if p_in else 'S/P'} - {c_us_final_val} - Presupuesto {num_pres} - C.H. Servicio Automotriz"
                         e_as = st.text_input("Asunto:", value=asunto_def.upper())
                         
                         e_ms = st.text_area("Mensaje:", value=f"Estimado(a),\n\nAdjunto enviamos el presupuesto solicitado para la patente {p_in if p_in else 'N/A'}.\n\nSaludos cordiales.")
                         
-                        if st.session_state.c_origen == "Kaufmann":
+                        if st.session_state.get('c_origen', '') == "Kaufmann":
                             dir_c = cargar_directorio_correos()
                             d_sel = st.multiselect("Contactos Frecuentes Kaufmann:", options=list(dir_c.keys()), default=[])
                             e_ad = st.text_input("Correos Adicionales (separados por coma):")
