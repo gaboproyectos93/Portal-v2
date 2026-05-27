@@ -3,6 +3,8 @@ import pandas as pd
 import io
 import os
 import time 
+import tempfile
+from PIL import Image
 from fpdf import FPDF
 from datetime import datetime
 import smtplib
@@ -125,6 +127,7 @@ def formatear_patente(patente):
     if pat_str != "S/P":
         p_clean = pat_str.replace("-", "").replace(" ", "")
         if len(p_clean) > 2: return f"{p_clean[:2]}-{p_clean[2:]}"
+        return p_clean
     return pat_str
 
 def enviar_correo(destinatario, asunto, mensaje_texto, pdf_bytes, nombre_archivo, email_reply):
@@ -299,8 +302,6 @@ def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, ite
         pdf.set_font('Arial', '', 9)
         pdf.multi_cell(0, 5, str(observaciones), 0, 'L')
         
-    import tempfile
-    from PIL import Image
     if fotos_subidas:
         pdf.add_page()
         pdf.set_font('Arial', 'B', 10)
@@ -340,10 +341,16 @@ def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, ite
 # 4. FUNCIONES DE BASE DE DATOS Y BORRADOR
 # ==========================================
 def buscar_vehiculo_en_directorio(patente):
+    if not patente or patente.strip() == "": return None
     try:
-        res = supabase.table("directorio_vehiculos").select("*").ilike("patente", patente).execute()
+        pat_formateada = formatear_patente(patente)
+        pat_limpia = str(patente).upper().replace("-", "").replace(" ", "")
+        
+        # Búsqueda infalible (con o sin guión)
+        query = f"patente.eq.{pat_formateada},patente.eq.{pat_limpia}"
+        res = supabase.table("directorio_vehiculos").select("*").or_(query).execute()
         if res.data: return res.data[0]
-    except: pass
+    except Exception as e: pass
     return None
 
 def subir_pdf_a_storage(nombre_archivo, pdf_bytes):
@@ -357,9 +364,10 @@ def subir_pdf_a_storage(nombre_archivo, pdf_bytes):
 
 def registrar_solicitud_gabo(patente, contacto, telefono, correo, origen, destino_txt, tarifa_math, descripcion, n_sap, marca=None, modelo=None):
     try:
-        if patente:
+        pat_oficial = formatear_patente(patente)
+        if pat_oficial != "S/P":
             upsert_data = {
-                "patente": patente, "nombre_contacto": contacto, 
+                "patente": pat_oficial, "nombre_contacto": contacto, 
                 "telefono": telefono, "correo": correo, 
                 "origen_cliente": origen, "cliente_final": destino_txt, "tipo_cliente": tarifa_math
             }
@@ -368,7 +376,7 @@ def registrar_solicitud_gabo(patente, contacto, telefono, correo, origen, destin
             supabase.table("directorio_vehiculos").upsert(upsert_data).execute()
         
         supabase.table("historial_trabajos").insert({
-            "patente": patente if patente else None,
+            "patente": pat_oficial if pat_oficial != "S/P" else None,
             "origen_trabajo": origen, "usuario_final": destino_txt, "tarifa_aplicada": tarifa_math,
             "contacto_gestion": contacto, "descripcion_requerimiento": descripcion,
             "estado": "Requerido", "creado_por": "Gabo", "n_sap": n_sap,
@@ -659,7 +667,7 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
             st.session_state.hay_borrador = datos_recuperados
             
     if st.session_state.get('hay_borrador'):
-        st.markdown(f"""<div class="card-borrador"><h4>⚠️ Tienes una cotización en pausa (Patente: {formatear_patente(st.session_state.hay_borrador.get('c_patente'))})</h4></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="card-borrador"><h4>⚠️ Tienes una cotización en pausa (Patente: {formatear_patente(st.session_state.hay_borrador.get('c_patente', 'S/P'))})</h4></div>""", unsafe_allow_html=True)
         c_a, c_b = st.columns(2)
         if c_a.button("✅ Recuperar Trabajo", use_container_width=True):
             b = st.session_state.hay_borrador
@@ -757,15 +765,6 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                         st.session_state.vista_taller = "Bandeja"
                         st.rerun()
                         
-                # MENSAJE DE RECONOCIMIENTO
-                if datos_v:
-                    if datos_v.get('origen_cliente') == 'Kaufmann':
-                        st.success("✅ Vehículo corporativo de Kaufmann reconocido en la base de datos.")
-                    else:
-                        st.success("✅ Vehículo particular reconocido en la base de datos.")
-                else:
-                    if p_in: st.info("⚠️ Vehículo nuevo. Por favor completa los datos.")
-                
                 idx_cli = 0 if st.session_state.get('c_origen')=="Kaufmann" else 1
                 v_origen = st.selectbox("Cliente", ["Kaufmann", "Propio Cristian"], index=idx_cli)
                 
@@ -971,16 +970,17 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                                 c_tarifa_val = st.session_state.get('c_tarifa', 'Cliente Particular')
                                 c_nsap_val = st.session_state.get('c_nsap', '')
 
-                                if p_in:
-                                    supabase.table("directorio_vehiculos").upsert({"patente": p_in, "rut_facturacion": c_rut_fac_val, "marca": c_marca_val, "modelo": c_modelo_val}).execute()
+                                pat_oficial = formatear_patente(p_in)
+                                if pat_oficial != "S/P":
+                                    supabase.table("directorio_vehiculos").upsert({"patente": pat_oficial, "rut_facturacion": c_rut_fac_val, "marca": c_marca_val, "modelo": c_modelo_val}).execute()
 
                                 sol_id = st.session_state.get('sol_activa')
                                 fecha_actual = get_fecha_hora_chile()
-                                pat_safe = p_in.replace("-", "").replace(" ", "") if p_in else "SP"
+                                pat_safe = pat_oficial.replace("-", "") if pat_oficial != "S/P" else "SP"
                                 
                                 if sol_id:
                                     corr_id = str(sol_id)
-                                    pdf_b = generar_pdf_oficial(p_in, c_marca_val, c_modelo_val, c_cli_fac_val, c_rut_fac_val, sel_final, tn, False, est, c_us_final_val, obs, corr_id, c_nsap_val, fotos_in)
+                                    pdf_b = generar_pdf_oficial(pat_oficial, c_marca_val, c_modelo_val, c_cli_fac_val, c_rut_fac_val, sel_final, tn, False, est, c_us_final_val, obs, corr_id, c_nsap_val, fotos_in)
                                     n_pdf = f"Presupuesto_{corr_id}_{pat_safe}.pdf"
                                     
                                     url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
@@ -988,21 +988,23 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                                         supabase.table("historial_trabajos").update({
                                             "estado": "Generado", "total_clp": tf, "pdf_url": url_doc, 
                                             "origen_trabajo": c_origen_val, "usuario_final": c_us_final_val, "tarifa_aplicada": c_tarifa_val, "nombre_cliente_manual": c_cli_fac_val,
-                                            "marca": c_marca_val, "modelo": c_modelo_val
+                                            "marca": c_marca_val, "modelo": c_modelo_val,
+                                            "patente": pat_oficial if pat_oficial != "S/P" else None
                                         }).eq("id_cotizacion", sol_id).execute()
                                     else:
                                         st.error("Error al subir archivo. Revisa permisos en Storage.")
                                         st.stop()
                                 else:
                                     res = supabase.table("historial_trabajos").insert({
-                                        "patente": p_in if p_in else None, "origen_trabajo": c_origen_val, "nombre_cliente_manual": c_cli_fac_val,
+                                        "patente": pat_oficial if pat_oficial != "S/P" else None,
+                                        "origen_trabajo": c_origen_val, "nombre_cliente_manual": c_cli_fac_val,
                                         "usuario_final": c_us_final_val, "tarifa_aplicada": c_tarifa_val,
                                         "estado": "Generado", "total_clp": tf, "creado_por": "Cristian",
                                         "marca": c_marca_val, "modelo": c_modelo_val,
                                         "fecha_creacion": fecha_actual
                                     }).execute()
                                     corr_id = str(res.data[0]['id_cotizacion'])
-                                    pdf_b = generar_pdf_oficial(p_in, c_marca_val, c_modelo_val, c_cli_fac_val, c_rut_fac_val, sel_final, tn, False, est, c_us_final_val, obs, corr_id, "", fotos_in)
+                                    pdf_b = generar_pdf_oficial(pat_oficial, c_marca_val, c_modelo_val, c_cli_fac_val, c_rut_fac_val, sel_final, tn, False, est, c_us_final_val, obs, corr_id, "", fotos_in)
                                     n_pdf = f"Presupuesto_{corr_id}_{pat_safe}.pdf"
                                     
                                     url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
@@ -1037,29 +1039,47 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                         
                         e_ms = st.text_area("Mensaje:", value=f"Estimado(a),\n\nAdjunto enviamos el presupuesto solicitado para la patente {pat_formateada}.\n\nSaludos cordiales.")
                         
-                        # Menú de correos unificado
-                        dir_c = cargar_directorio_correos()
-                        d_sel = st.multiselect("Contactos Frecuentes:", options=list(dir_c.keys()), default=[])
-                        e_ad = st.text_input("Correos Adicionales (separados por coma):")
+                        if st.session_state.get('c_origen', '') == "Kaufmann":
+                            dir_c = cargar_directorio_correos()
+                            d_sel = st.multiselect("Contactos Frecuentes Kaufmann:", options=list(dir_c.keys()), default=[])
+                            e_ad = st.text_input("Correos Adicionales (separados por coma):")
+                            
+                            if st.button("📤 Enviar Correo a Kaufmann", type="primary"):
+                                lc = [dir_c[n] for n in d_sel]
+                                if e_ad: lc.extend([e.strip() for e in e_ad.split(',') if e.strip()])
+                                dfinal = ", ".join(lc)
+                                if dfinal:
+                                    with st.spinner("Enviando..."):
+                                        ex, m = enviar_correo(dfinal, e_as, e_ms, d['pdf'], d['nombre'], EMAIL_SISTEMA)
+                                    if ex:
+                                        sol_id = st.session_state.get('sol_activa')
+                                        id_a_actualizar = sol_id if sol_id else int(num_pres)
+                                        supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", id_a_actualizar).execute()
+                                        st.success("✅ Enviado exitosamente. Actualizando bandeja...")
+                                        time.sleep(1.5)
+                                        limpiar_sesiones()
+                                        st.session_state.vista_taller = "Bandeja"
+                                        st.rerun()
+                                    else: st.error(f"❌ {m}")
+                                else: st.warning("Ingresa un destinatario.")
                         
-                        if st.button("📤 Enviar Correo", type="primary"):
-                            lc = [dir_c[n] for n in d_sel]
-                            if e_ad: lc.extend([e.strip() for e in e_ad.split(',') if e.strip()])
-                            dfinal = ", ".join(lc)
-                            if dfinal:
-                                with st.spinner("Enviando..."):
-                                    ex, m = enviar_correo(dfinal, e_as, e_ms, d['pdf'], d['nombre'], EMAIL_SISTEMA)
-                                if ex:
-                                    sol_id = st.session_state.get('sol_activa')
-                                    id_a_actualizar = sol_id if sol_id else int(num_pres)
-                                    supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", id_a_actualizar).execute()
-                                    st.success("✅ Enviado exitosamente. Actualizando estado de la orden...")
-                                    time.sleep(1.5)
-                                    limpiar_sesiones()
-                                    st.session_state.vista_taller = "Bandeja"
-                                    st.rerun()
-                                else: st.error(f"❌ {m}")
-                            else: st.warning("Ingresa al menos un destinatario.")
+                        else:
+                            e_ad_propio = st.text_input("Ingresa el correo de tu cliente (separados por coma si son varios):")
+                            if st.button("📤 Enviar Correo Privado", type="primary"):
+                                if e_ad_propio:
+                                    with st.spinner("Enviando..."):
+                                        ex, m = enviar_correo(e_ad_propio.strip(), e_as, e_ms, d['pdf'], d['nombre'], EMAIL_SISTEMA)
+                                    if ex:
+                                        sol_id = st.session_state.get('sol_activa')
+                                        id_a_actualizar = sol_id if sol_id else int(num_pres)
+                                        supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", id_a_actualizar).execute()
+                                        st.success("✅ Enviado exitosamente a tu cliente.")
+                                        time.sleep(1.5)
+                                        limpiar_sesiones()
+                                        st.session_state.vista_taller = "Historial" 
+                                        st.rerun()
+                                    else: st.error(f"❌ {m}")
+                                else: st.warning("Debes ingresar el correo del cliente.")
 
                     st.markdown("---")
                     if st.button("🏠 Finalizar y Volver al Inicio", type="primary"):
@@ -1076,7 +1096,8 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
             
             lupa = st.text_input("🔍 Búsqueda Universal (Escribe patente, marca, cliente, ID, fecha o estado...)").upper()
             if lupa:
-                mask = df_view.astype(str).apply(lambda col: col.str.contains(lupa, case=False, na=False)).any(axis=1)
+                lupa_limpia = lupa.replace("-", "").replace(" ", "")
+                mask = df_view.astype(str).apply(lambda row: ' '.join(row.values).replace("-", "").replace(" ", "").upper(), axis=1).str.contains(lupa_limpia, case=False, na=False)
                 df_view = df_view[mask]
 
             st.markdown("---")
