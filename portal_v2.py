@@ -173,10 +173,9 @@ class PDF(FPDF):
         self.cell(70, 10, "COTIZACIÓN" if self.is_official else "PRESUPUESTO", 'LTR', 1, 'C') 
         
         self.set_x(130)
-        self.set_font('Arial', 'B', 12)
+        self.set_font('Arial', 'B', 14)
+        # ELIMINADA LA PATENTE DEL HEADER
         txt_head = f"N° {self.correlativo}"
-        if self.patente and self.patente != "S/P":
-            txt_head += f" | {self.patente}"
         self.cell(70, 10, txt_head, 'LBR', 1, 'C')
         
         self.set_text_color(0, 0, 0)
@@ -346,7 +345,6 @@ def buscar_vehiculo_en_directorio(patente):
         pat_formateada = formatear_patente(patente)
         pat_limpia = str(patente).upper().replace("-", "").replace(" ", "")
         
-        # Búsqueda infalible (con o sin guión)
         query = f"patente.eq.{pat_formateada},patente.eq.{pat_limpia}"
         res = supabase.table("directorio_vehiculos").select("*").or_(query).execute()
         if res.data: return res.data[0]
@@ -467,11 +465,11 @@ if st.session_state.usuario is None:
         p_sel = st.selectbox("Identificación de Usuario", ["--- Seleccione ---", "Gabriel Poblete (Planificador)", "Christian Herrera (Taller)"])
         pass_in = st.text_input("Contraseña", type="password")
         if st.button("Ingresar al Sistema", type="primary"):
-            if p_sel == "Gabriel Poblete (Planificador)" and pass_in == "torre":
+            if p_sel == "Gabriel Poblete (Planificador)" and pass_in == "gabo2026":
                 st.session_state.usuario = "Gabo"
                 st.session_state.vista_gabo = "Dashboard"
                 st.rerun()
-            elif p_sel == "Christian Herrera (Taller)" and pass_in == "chsa":
+            elif p_sel == "Christian Herrera (Taller)" and pass_in == "cristian2026":
                 st.session_state.usuario = "Cristian"
                 st.session_state.vista_taller = "Bandeja"
                 st.rerun()
@@ -764,9 +762,14 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                         limpiar_sesiones()
                         st.session_state.vista_taller = "Bandeja"
                         st.rerun()
-                        
-                idx_cli = 0 if st.session_state.get('c_origen')=="Kaufmann" else 1
-                v_origen = st.selectbox("Cliente", ["Kaufmann", "Propio Cristian"], index=idx_cli)
+                
+                origen_bd = datos_v.get('origen_cliente') if datos_v else None
+                if origen_bd == "Kaufmann":
+                    st.info("🔒 Vehículo corporativo de Kaufmann. Asignación de cliente bloqueada por seguridad.")
+                    v_origen = st.selectbox("Cliente", ["Kaufmann"], index=0, disabled=True)
+                else:
+                    idx_cli = 0 if st.session_state.get('c_origen') == "Kaufmann" else 1
+                    v_origen = st.selectbox("Cliente", ["Kaufmann", "Propio Cristian"], index=idx_cli)
                 
                 if v_origen == "Kaufmann":
                     def_cli = "KAUFMANN S.A."
@@ -1055,10 +1058,10 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                                         sol_id = st.session_state.get('sol_activa')
                                         id_a_actualizar = sol_id if sol_id else int(num_pres)
                                         supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", id_a_actualizar).execute()
-                                        st.success("✅ Enviado exitosamente. Actualizando bandeja...")
+                                        st.success("✅ Enviado exitosamente. Movido a 'Enviados' automáticamente en el Kanban.")
                                         time.sleep(1.5)
                                         limpiar_sesiones()
-                                        st.session_state.vista_taller = "Bandeja"
+                                        st.session_state.vista_taller = "Historial"
                                         st.rerun()
                                     else: st.error(f"❌ {m}")
                                 else: st.warning("Ingresa un destinatario.")
@@ -1073,7 +1076,7 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                                         sol_id = st.session_state.get('sol_activa')
                                         id_a_actualizar = sol_id if sol_id else int(num_pres)
                                         supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", id_a_actualizar).execute()
-                                        st.success("✅ Enviado exitosamente a tu cliente.")
+                                        st.success("✅ Enviado exitosamente a tu cliente. Movido a 'Enviados' automáticamente en el Kanban.")
                                         time.sleep(1.5)
                                         limpiar_sesiones()
                                         st.session_state.vista_taller = "Historial" 
