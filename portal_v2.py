@@ -467,11 +467,11 @@ if st.session_state.usuario is None:
         p_sel = st.selectbox("Identificación de Usuario", ["--- Seleccione ---", "Gabriel Poblete (Planificador)", "Christian Herrera (Taller)"])
         pass_in = st.text_input("Contraseña", type="password")
         if st.button("Ingresar al Sistema", type="primary"):
-            if p_sel == "Gabriel Poblete (Planificador)" and pass_in == "gabo2026":
+            if p_sel == "Gabriel Poblete (Planificador)" and pass_in == "torre":
                 st.session_state.usuario = "Gabo"
                 st.session_state.vista_gabo = "Dashboard"
                 st.rerun()
-            elif p_sel == "Christian Herrera (Taller)" and pass_in == "cristian2026":
+            elif p_sel == "Christian Herrera (Taller)" and pass_in == "chsa":
                 st.session_state.usuario = "Cristian"
                 st.session_state.vista_taller = "Bandeja"
                 st.rerun()
