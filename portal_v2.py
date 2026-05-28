@@ -469,7 +469,7 @@ if st.session_state.usuario is None:
                 st.session_state.usuario = "Gabo"
                 st.session_state.vista_gabo = "Dashboard"
                 st.rerun()
-            elif p_sel == "Christian Herrera (Taller)" and pass_in == "cristian2026":
+            elif p_sel == "Christian Herrera (Taller)" and pass_in == "Herrera80":
                 st.session_state.usuario = "Cristian"
                 st.session_state.vista_taller = "Bandeja"
                 st.rerun()
