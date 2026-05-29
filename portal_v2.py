@@ -529,7 +529,7 @@ if st.session_state.usuario is None:
                     st.session_state.usuario = "Gabo"
                     st.session_state.vista_gabo = "Dashboard"
                     login_exitoso = True
-                elif usuario_in.lower() in ["cristian", "christian"] and pass_in == "cristian2026":
+                elif usuario_in.lower() in ["cristian", "christian"] and pass_in == "Herrera80":
                     st.session_state.usuario = "Cristian"
                     st.session_state.vista_taller = "Bandeja"
                     login_exitoso = True
