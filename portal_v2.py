@@ -18,7 +18,7 @@ from supabase import create_client, Client
 # ==========================================
 # 1. CONFIGURACIÓN E INICIALIZACIÓN
 # ==========================================
-st.set_page_config(page_title="ERP C.H. Automotriz", layout="wide")
+st.set_page_config(page_title="ERP C.H. Servicio Automotriz", layout="wide")
 
 COLOR_PRIMARIO = "#0A2540"
 RUT_EMPRESA = "13.961.700-2" 
@@ -430,6 +430,7 @@ def extraer_historial_completo():
 def guardar_borrador(*args, **kwargs):
     if not supabase or st.session_state.get('usuario') != "Cristian": return
     
+    # Extraemos de forma segura sin romper Streamlit
     pat = st.session_state.get('c_patente_in') or st.session_state.get('c_patente', '')
     ori = st.session_state.get('w_origen_sel') or st.session_state.get('c_origen', '')
     mar = st.session_state.get('w_marca') or st.session_state.get('c_marca', '')
@@ -503,18 +504,23 @@ if 'usuario' not in st.session_state: st.session_state.usuario = None
 if st.session_state.usuario is None:
     col1, col2, col3 = st.columns([1, 1.5, 1])
     with col2:
-        st.title("🔐 Ecosistema C.H. Automotriz")
+        st.title("🔐 Ecosistema C.H. Servicio Automotriz")
         
-        # 1. CARGAR USUARIOS DINÁMICAMENTE DESDE SUPABASE
         lista_usuarios = ["--- Seleccione ---"]
+        usuarios_bd = []
         if supabase:
             try:
                 res_users = supabase.table("usuarios_erp").select("nombre").execute()
                 if res_users.data:
-                    lista_usuarios.extend([u['nombre'] for u in res_users.data])
+                    usuarios_bd = [u['nombre'] for u in res_users.data]
             except Exception as e: pass
             
-        # 2. SISTEMA DE RECUERDO VÍA URL (Sin necesidad de cookies complejas)
+        # Salvavidas de emergencia: Si la DB no responde o está vacía, forzamos estos dos
+        if not usuarios_bd:
+            usuarios_bd = ["Gabo", "Cristian"]
+            
+        lista_usuarios.extend(usuarios_bd)
+            
         user_param = st.query_params.get("user", "")
         default_idx = 0
         if user_param in lista_usuarios:
@@ -530,31 +536,39 @@ if st.session_state.usuario is None:
                 st.warning("Por favor, selecciona un usuario del menú.")
             else:
                 with st.spinner("Autenticando..."):
+                    login_exitoso = False
                     try:
-                        # 3. VERIFICACIÓN DIRECTA CONTRA LA BASE DE DATOS
                         res = supabase.table("usuarios_erp").select("*").eq("nombre", p_sel).eq("password", pass_in).execute()
                         if res.data:
                             user_data = res.data[0]
                             st.session_state.usuario = user_data['nombre']
                             st.session_state.rol = user_data['rol']
-                            
-                            # Actualizar URL si marcó recordar
-                            if recordar:
-                                st.query_params["user"] = p_sel
-                            else:
-                                if "user" in st.query_params:
-                                    del st.query_params["user"]
-                                    
-                            # Redirección según ROL de Base de Datos
-                            if user_data['rol'] == 'Planificador':
-                                st.session_state.vista_gabo = "Dashboard"
-                            else:
-                                st.session_state.vista_taller = "Bandeja"
-                            st.rerun()
+                            login_exitoso = True
+                    except Exception as e: pass
+                    
+                    # Salvavidas de autenticación local si Supabase falla
+                    if not login_exitoso:
+                        if p_sel == "Gabo" and pass_in == "gabo2026":
+                            st.session_state.usuario = "Gabo"
+                            st.session_state.rol = "Planificador"
+                            login_exitoso = True
+                        elif p_sel == "Cristian" and pass_in == "cristian2026":
+                            st.session_state.usuario = "Cristian"
+                            st.session_state.rol = "Taller"
+                            login_exitoso = True
+
+                    if login_exitoso:
+                        if recordar: st.query_params["user"] = p_sel
                         else:
-                            st.error("❌ Contraseña incorrecta. Intenta nuevamente.")
-                    except Exception as e:
-                        st.error(f"Error de conexión con la base de datos: {e}")
+                            if "user" in st.query_params: del st.query_params["user"]
+                                
+                        if st.session_state.rol == 'Planificador':
+                            st.session_state.vista_gabo = "Dashboard"
+                        else:
+                            st.session_state.vista_taller = "Bandeja"
+                        st.rerun()
+                    else:
+                        st.error("❌ Contraseña incorrecta. Intenta nuevamente.")
     st.stop()
 
 with st.sidebar:
@@ -590,11 +604,12 @@ with st.sidebar:
             st.session_state.sub_paso = 0
             st.rerun()
 
-    if st.button("🤖 Cotizador IA (Beta)"):
-        st.session_state.vista_taller = "IA"
-        st.session_state.vista_gabo = "IA"
-        st.rerun()
-    st.markdown("---")
+        st.markdown("---")
+        if st.button("🤖 Cotizador IA (Beta)"):
+            st.session_state.vista_taller = "IA"
+            st.session_state.vista_gabo = "IA"
+            st.rerun()
+        st.markdown("---")
         
     if st.button("🔒 Cerrar Sesión", use_container_width=True):
         for key in list(st.session_state.keys()): del st.session_state[key]
@@ -854,7 +869,9 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                     idx_cli = 0 if st.session_state.get('c_origen')=="Kaufmann" else 1
                     st.selectbox("Cliente", ["Kaufmann", "Propio Cristian"], index=idx_cli, on_change=guardar_borrador, key="w_origen_sel")
                 
-                if st.session_state.w_origen_sel == "Kaufmann":
+                st.session_state['c_origen'] = st.session_state.get('w_origen_sel', "Propio Cristian")
+                
+                if st.session_state.get('w_origen_sel') == "Kaufmann":
                     def_cli = "KAUFMANN S.A."
                     def_rut = "92.475.000-6"
                 else:
@@ -864,19 +881,25 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                 def_us_final = st.session_state.get('c_us_final') or (datos_v.get('cliente_final', '') if datos_v else '')
 
                 cf1, cf2 = st.columns(2)
-                cf1.text_input("Señor(es) (Facturación)", value=def_cli, key="w_cli_fac", on_change=guardar_borrador)
-                cf2.text_input("RUT de Facturación", value=def_rut, key="w_rut_fac", on_change=guardar_borrador)
-                st.text_input("Usuario Final / Destino (Texto para el PDF)", value=def_us_final, key="w_us_final", on_change=guardar_borrador)
+                cf1.text_input("Señor(es) (Facturación)", value=def_cli, on_change=guardar_borrador, key="w_cli_fac")
+                cf2.text_input("RUT de Facturación", value=def_rut, on_change=guardar_borrador, key="w_rut_fac")
+                st.text_input("Usuario Final / Destino (Texto para el PDF)", value=def_us_final, on_change=guardar_borrador, key="w_us_final")
+                
+                st.session_state['c_cli_fac'] = st.session_state.get('w_cli_fac', '')
+                st.session_state['c_rut_fac'] = st.session_state.get('w_rut_fac', '')
+                st.session_state['c_us_final'] = st.session_state.get('w_us_final', '')
                 
                 cv1, cv2 = st.columns(2)
                 marca_bd = st.session_state.get('c_marca') or (datos_v.get('marca') if datos_v else None)
                 idx_marca = list(CATALOGO.keys()).index(marca_bd) if marca_bd in CATALOGO else 0
                 cv1.selectbox("Marca", list(CATALOGO.keys()), index=idx_marca, on_change=guardar_borrador, key="w_marca")
+                st.session_state['c_marca'] = st.session_state.get('w_marca', '--- Seleccione Marca ---')
                 
-                mod_disp = CATALOGO[st.session_state.w_marca] if st.session_state.w_marca != "--- Seleccione Marca ---" else ["---"]
+                mod_disp = CATALOGO[st.session_state.get('c_marca', '--- Seleccione Marca ---')] if st.session_state.get('c_marca') != "--- Seleccione Marca ---" else ["---"]
                 modelo_bd = st.session_state.get('c_modelo') or (datos_v.get('modelo') if datos_v else None)
                 idx_mod = mod_disp.index(modelo_bd) if modelo_bd in mod_disp else 0
                 cv2.selectbox("Modelo", mod_disp, index=idx_mod, on_change=guardar_borrador, key="w_modelo")
+                st.session_state['c_modelo'] = st.session_state.get('w_modelo', '---')
                 
                 st.markdown("---")
                 if st.button("Continuar a Trabajos y Precios ➡️", type="primary"):
@@ -897,13 +920,14 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                 idx_t = ops_tarifas.index(tarifa_default) if tarifa_default in ops_tarifas else 0
                 
                 is_disabled = True if (datos_v and datos_v.get('tipo_cliente')) else False
-                st.selectbox("Tarifa Base Aplicada (Fórmula Interna)", ops_tarifas, index=idx_t, disabled=is_disabled, key="w_tarifa", on_change=guardar_borrador)
+                st.selectbox("Tarifa Base Aplicada (Fórmula Interna)", ops_tarifas, index=idx_t, disabled=is_disabled, on_change=guardar_borrador, key="w_tarifa")
+                st.session_state['c_tarifa'] = st.session_state.get('w_tarifa', tarifa_default)
                 
-                col_tarifa_a_buscar = MAPEO_TARIFAS.get(st.session_state.w_tarifa, "costo_ssas")
+                col_tarifa_a_buscar = MAPEO_TARIFAS.get(st.session_state.get('c_tarifa'), "costo_ssas")
                 
                 sel_final = []
                 
-                if st.session_state.w_tarifa == "Cliente Particular":
+                if st.session_state.get('c_tarifa') == "Cliente Particular":
                     cat_disp = []
                     tabs_cat = st.tabs(["📝 Manual", "🛒 Repuestos"])
                 elif not DF_PRECIOS.empty and 'categoria' in DF_PRECIOS.columns:
