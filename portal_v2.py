@@ -430,22 +430,27 @@ def extraer_historial_completo():
 def guardar_borrador(*args, **kwargs):
     if not supabase or st.session_state.get('usuario') != "Cristian": return
     
+    # Extraemos desde las variables desconectadas (w_) o el estado tradicional
     pat = st.session_state.get('c_patente_in') or st.session_state.get('c_patente', '')
-    ori = st.session_state.get('c_origen_sel') or st.session_state.get('c_origen', '')
-    mar = st.session_state.get('sel_marca') or st.session_state.get('c_marca', '')
-    mod = st.session_state.get('sel_modelo') or st.session_state.get('c_modelo', '')
+    ori = st.session_state.get('w_origen_sel') or st.session_state.get('c_origen', '')
+    mar = st.session_state.get('w_marca') or st.session_state.get('c_marca', '')
+    mod = st.session_state.get('w_modelo') or st.session_state.get('c_modelo', '')
+    tar = st.session_state.get('w_tarifa') or st.session_state.get('c_tarifa', '')
+    cli = st.session_state.get('w_cli_fac') or st.session_state.get('c_cli_fac', '')
+    rut = st.session_state.get('w_rut_fac') or st.session_state.get('c_rut_fac', '')
+    usf = st.session_state.get('w_us_final') or st.session_state.get('c_us_final', '')
     
     datos = {
         'sol_activa': st.session_state.get('sol_activa'),
         'sub_paso': st.session_state.get('sub_paso', 1),
         'c_patente': pat,
         'c_origen': ori,
-        'c_cli_fac': st.session_state.get('c_cli_fac', ''),
-        'c_rut_fac': st.session_state.get('c_rut_fac', ''),
-        'c_us_final': st.session_state.get('c_us_final', ''),
+        'c_cli_fac': cli,
+        'c_rut_fac': rut,
+        'c_us_final': usf,
         'c_marca': mar,
         'c_modelo': mod,
-        'c_tarifa': st.session_state.get('c_tarifa', ''),
+        'c_tarifa': tar,
         'c_nsap': st.session_state.get('c_nsap', ''),
         'lista_particular': st.session_state.get('lista_particular', []),
         'lista_repuestos': st.session_state.get('lista_repuestos', [])
@@ -456,14 +461,13 @@ def guardar_borrador(*args, **kwargs):
             datos[k] = st.session_state[k]
             
     try: 
-        # AQUI ESTABA EL BUG: SE CORRIGIÓ "id_usuario" por "usuario"
+        # CORRECCIÓN DE LA COLUMNA: Se usa 'usuario' en vez de 'id_usuario'
         supabase.table("borradores_cotizacion").upsert({'usuario': 'Cristian', 'datos': datos}).execute()
     except Exception as e: print(f"Error borrador: {e}")
 
 def cargar_borrador():
     if not supabase: return None
     try:
-        # AQUI ESTABA EL BUG: SE CORRIGIÓ "id_usuario" por "usuario"
         res = supabase.table("borradores_cotizacion").select("datos").eq("usuario", "Cristian").execute()
         if res.data: return res.data[0]['datos']
     except: pass
@@ -471,9 +475,7 @@ def cargar_borrador():
 
 def eliminar_borrador():
     if not supabase: return
-    try: 
-        # AQUI ESTABA EL BUG: SE CORRIGIÓ "id_usuario" por "usuario"
-        supabase.table("borradores_cotizacion").delete().eq("usuario", "Cristian").execute()
+    try: supabase.table("borradores_cotizacion").delete().eq("usuario", "Cristian").execute()
     except: pass
 
 def limpiar_sesiones():
@@ -482,10 +484,10 @@ def limpiar_sesiones():
         'c_us_final', 'c_marca', 'c_modelo', 'c_tarifa', 'c_nsap', 'lista_particular', 
         'lista_repuestos', 'presupuesto_generado', 'sel_final_cache',
         'g_patente', 'g_vehiculo_existe', 'g_marca', 'g_modelo', 'g_dest_txt', 
-        'g_tarifa', 'g_nsap'
+        'g_tarifa', 'g_nsap', 'hay_borrador', 'borrador_check', 'c_patente_in'
     ]
     for k in list(st.session_state.keys()):
-        if k in claves_a_borrar or k.startswith("q_"):
+        if k in claves_a_borrar or k.startswith("w_") or k.startswith("q_"):
             del st.session_state[k]
     if st.session_state.get('usuario') == "Cristian":
         eliminar_borrador()
@@ -503,18 +505,39 @@ if st.session_state.usuario is None:
     col1, col2, col3 = st.columns([1, 1.5, 1])
     with col2:
         st.title("🔐 Ecosistema C.H. Automotriz")
-        p_sel = st.selectbox("Identificación de Usuario", ["--- Seleccione ---", "Gabriel Poblete (Planificador)", "Christian Herrera (Taller)"])
+        usuario_in = st.text_input("Usuario (Ej: Gabo o Cristian)").strip()
         pass_in = st.text_input("Contraseña", type="password")
+        
         if st.button("Ingresar al Sistema", type="primary"):
-            if p_sel == "Gabriel Poblete (Planificador)" and pass_in == "gabo2026":
-                st.session_state.usuario = "Gabo"
-                st.session_state.vista_gabo = "Dashboard"
+            login_exitoso = False
+            try:
+                # Login contra la base de datos Supabase
+                res = supabase.table("usuarios_erp").select("*").eq("nombre", usuario_in).eq("password", pass_in).execute()
+                if res.data:
+                    user_data = res.data[0]
+                    st.session_state.usuario = user_data['nombre']
+                    if user_data['rol'] == 'Planificador':
+                        st.session_state.vista_gabo = "Dashboard"
+                    else:
+                        st.session_state.vista_taller = "Bandeja"
+                    login_exitoso = True
+            except Exception as e: pass
+            
+            # Salvavidas en caso de que aún no hayas creado la tabla en SQL
+            if not login_exitoso:
+                if usuario_in.lower() in ["gabo", "gabriel"] and pass_in == "gabo2026":
+                    st.session_state.usuario = "Gabo"
+                    st.session_state.vista_gabo = "Dashboard"
+                    login_exitoso = True
+                elif usuario_in.lower() in ["cristian", "christian"] and pass_in == "cristian2026":
+                    st.session_state.usuario = "Cristian"
+                    st.session_state.vista_taller = "Bandeja"
+                    login_exitoso = True
+                    
+            if login_exitoso:
                 st.rerun()
-            elif p_sel == "Christian Herrera (Taller)" and pass_in == "Herrera80":
-                st.session_state.usuario = "Cristian"
-                st.session_state.vista_taller = "Bandeja"
-                st.rerun()
-            else: st.error("Credenciales Inválidas.")
+            else:
+                st.error("Credenciales Inválidas. Verifica tu usuario y contraseña.")
     st.stop()
 
 with st.sidebar:
@@ -700,28 +723,29 @@ elif st.session_state.usuario == "Gabo" and st.session_state.get('vista_gabo') !
 # ==========================================
 elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_taller') != "IA":
     
-    if 'borrador_check' not in st.session_state:
-        st.session_state.borrador_check = True
-        
-    datos_recuperados = cargar_borrador()
-    if datos_recuperados:
-        st.session_state.hay_borrador = datos_recuperados
-            
-    if st.session_state.get('hay_borrador'):
-        st.markdown(f"""<div class="card-borrador"><h4>⚠️ Tienes una cotización en pausa (Patente: {formatear_patente(st.session_state.hay_borrador.get('c_patente', 'S/P'))})</h4></div>""", unsafe_allow_html=True)
-        c_a, c_b = st.columns(2)
-        if c_a.button("✅ Recuperar Trabajo", use_container_width=True):
-            b = st.session_state.hay_borrador
-            for k, v in b.items(): st.session_state[k] = v
-            st.session_state.vista_taller = "Cotizador"
-            del st.session_state['hay_borrador']
+    # ------------------ SISTEMA DE BORRADOR ------------------
+    if st.session_state.vista_taller == "Bandeja":
+        if 'borrador_check' not in st.session_state:
             st.session_state.borrador_check = True
-            st.rerun()
-        if c_b.button("🗑️ Descartar y Empezar de Cero", use_container_width=True):
-            eliminar_borrador()
-            del st.session_state['hay_borrador']
-            st.rerun()
-        st.markdown("---")
+            datos_recuperados = cargar_borrador()
+            if datos_recuperados:
+                st.session_state.hay_borrador = datos_recuperados
+                
+        if st.session_state.get('hay_borrador'):
+            st.markdown(f"""<div class="card-borrador"><h4>⚠️ Tienes una cotización en pausa (Patente: {formatear_patente(st.session_state.hay_borrador.get('c_patente', 'S/P'))})</h4></div>""", unsafe_allow_html=True)
+            c_a, c_b = st.columns(2)
+            if c_a.button("✅ Recuperar Trabajo", use_container_width=True):
+                b = st.session_state.hay_borrador
+                for k, v in b.items(): st.session_state[k] = v
+                st.session_state.vista_taller = "Cotizador"
+                del st.session_state['hay_borrador']
+                st.rerun()
+            if c_b.button("🗑️ Descartar y Empezar de Cero", use_container_width=True):
+                eliminar_borrador()
+                del st.session_state['hay_borrador']
+                st.rerun()
+            st.markdown("---")
+    # ---------------------------------------------------------
 
     if st.session_state.vista_taller == "Bandeja":
         st.title("📥 Bandeja de Entrada")
@@ -810,14 +834,15 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                 origen_bd = datos_v.get('origen_cliente') if datos_v else None
                 
                 if origen_bd == 'Kaufmann':
-                    v_origen = st.selectbox("Cliente", ["Kaufmann"], index=0, disabled=True)
+                    st.selectbox("Cliente", ["Kaufmann"], index=0, disabled=True, key="w_origen_sel")
                     st.info("🔒 Vehículo bloqueado en modo corporativo (Kaufmann).")
                 else:
                     idx_cli = 0 if st.session_state.get('c_origen')=="Kaufmann" else 1
-                    v_origen = st.selectbox("Cliente", ["Kaufmann", "Propio Cristian"], index=idx_cli, on_change=guardar_borrador, key="c_origen_sel")
-                    st.session_state['c_origen'] = st.session_state.c_origen_sel
+                    st.selectbox("Cliente", ["Kaufmann", "Propio Cristian"], index=idx_cli, on_change=guardar_borrador, key="w_origen_sel")
                 
-                if v_origen == "Kaufmann":
+                st.session_state['c_origen'] = st.session_state.w_origen_sel
+                
+                if st.session_state.w_origen_sel == "Kaufmann":
                     def_cli = "KAUFMANN S.A."
                     def_rut = "92.475.000-6"
                 else:
@@ -827,26 +852,25 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                 def_us_final = st.session_state.get('c_us_final') or (datos_v.get('cliente_final', '') if datos_v else '')
 
                 cf1, cf2 = st.columns(2)
-                v_cli = cf1.text_input("Señor(es) (Facturación)", value=def_cli)
-                v_rut = cf2.text_input("RUT de Facturación", value=def_rut)
-                v_us_final = st.text_input("Usuario Final / Destino (Texto para el PDF)", value=def_us_final)
+                cf1.text_input("Señor(es) (Facturación)", value=def_cli, key="w_cli_fac", on_change=guardar_borrador)
+                cf2.text_input("RUT de Facturación", value=def_rut, key="w_rut_fac", on_change=guardar_borrador)
+                st.text_input("Usuario Final / Destino (Texto para el PDF)", value=def_us_final, key="w_us_final", on_change=guardar_borrador)
                 
-                st.session_state['c_cli_fac'] = v_cli
-                st.session_state['c_rut_fac'] = v_rut
-                st.session_state['c_us_final'] = v_us_final
-                st.session_state['c_origen'] = v_origen
+                st.session_state['c_cli_fac'] = st.session_state.w_cli_fac
+                st.session_state['c_rut_fac'] = st.session_state.w_rut_fac
+                st.session_state['c_us_final'] = st.session_state.w_us_final
                 
                 cv1, cv2 = st.columns(2)
                 marca_bd = st.session_state.get('c_marca') or (datos_v.get('marca') if datos_v else None)
                 idx_marca = list(CATALOGO.keys()).index(marca_bd) if marca_bd in CATALOGO else 0
-                v_marca = cv1.selectbox("Marca", list(CATALOGO.keys()), index=idx_marca, on_change=guardar_borrador, key="sel_marca")
-                st.session_state['c_marca'] = st.session_state.sel_marca
+                cv1.selectbox("Marca", list(CATALOGO.keys()), index=idx_marca, on_change=guardar_borrador, key="w_marca")
+                st.session_state['c_marca'] = st.session_state.w_marca
                 
                 mod_disp = CATALOGO[st.session_state.c_marca] if st.session_state.c_marca != "--- Seleccione Marca ---" else ["---"]
                 modelo_bd = st.session_state.get('c_modelo') or (datos_v.get('modelo') if datos_v else None)
                 idx_mod = mod_disp.index(modelo_bd) if modelo_bd in mod_disp else 0
-                v_modelo = cv2.selectbox("Modelo", mod_disp, index=idx_mod, on_change=guardar_borrador, key="sel_modelo")
-                st.session_state['c_modelo'] = st.session_state.sel_modelo
+                cv2.selectbox("Modelo", mod_disp, index=idx_mod, on_change=guardar_borrador, key="w_modelo")
+                st.session_state['c_modelo'] = st.session_state.w_modelo
                 
                 st.markdown("---")
                 if st.button("Continuar a Trabajos y Precios ➡️", type="primary"):
@@ -867,14 +891,14 @@ elif st.session_state.usuario == "Cristian" and st.session_state.get('vista_tall
                 idx_t = ops_tarifas.index(tarifa_default) if tarifa_default in ops_tarifas else 0
                 
                 is_disabled = True if (datos_v and datos_v.get('tipo_cliente')) else False
-                v_tarifa = st.selectbox("Tarifa Base Aplicada (Fórmula Interna)", ops_tarifas, index=idx_t, disabled=is_disabled, key="c_tarifa", on_change=guardar_borrador)
-                st.session_state['c_tarifa'] = st.session_state.c_tarifa
+                st.selectbox("Tarifa Base Aplicada (Fórmula Interna)", ops_tarifas, index=idx_t, disabled=is_disabled, key="w_tarifa", on_change=guardar_borrador)
+                st.session_state['c_tarifa'] = st.session_state.w_tarifa
                 
-                col_tarifa_a_buscar = MAPEO_TARIFAS.get(v_tarifa, "costo_ssas")
+                col_tarifa_a_buscar = MAPEO_TARIFAS.get(st.session_state.c_tarifa, "costo_ssas")
                 
                 sel_final = []
                 
-                if v_tarifa == "Cliente Particular":
+                if st.session_state.c_tarifa == "Cliente Particular":
                     cat_disp = []
                     tabs_cat = st.tabs(["📝 Manual", "🛒 Repuestos"])
                 elif not DF_PRECIOS.empty and 'categoria' in DF_PRECIOS.columns:
