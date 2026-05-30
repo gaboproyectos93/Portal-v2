@@ -429,7 +429,6 @@ def extraer_historial_completo():
 
 def refrescar_carrito_global():
     sel_final = []
-    
     col_tarifa = MAPEO_TARIFAS.get(st.session_state.get('c_tarifa', ''), "costo_ssas")
     if not DF_PRECIOS.empty and 'categoria' in DF_PRECIOS.columns:
         for idx, row in DF_PRECIOS.iterrows():
@@ -438,15 +437,12 @@ def refrescar_carrito_global():
                 try: p = float(row[col_tarifa])
                 except: p = 0
                 sel_final.append({"Tipo": "matriz", "Descripción": row['trabajo'], "Cantidad": st.session_state[k], "Unitario_Costo": p, "Total_Costo": p * st.session_state[k], "Llave": k})
-    
     if 'lista_particular' in st.session_state: sel_final.extend(st.session_state.lista_particular)
     if 'lista_repuestos' in st.session_state: sel_final.extend(st.session_state.lista_repuestos)
-    
     st.session_state.sel_final_cache = sel_final
 
 def guardar_borrador(*args, **kwargs):
     if not supabase or st.session_state.get('usuario') != "Cristian": return
-    
     pat = st.session_state.get('c_patente_in') or st.session_state.get('c_patente', '')
     ori = st.session_state.get('w_origen_sel') or st.session_state.get('c_origen', '')
     mar = st.session_state.get('w_marca') or st.session_state.get('c_marca', '')
@@ -471,15 +467,12 @@ def guardar_borrador(*args, **kwargs):
         'lista_particular': st.session_state.get('lista_particular', []),
         'lista_repuestos': st.session_state.get('lista_repuestos', [])
     }
-    
     for k in st.session_state.keys():
         if k.startswith("q_") and isinstance(st.session_state[k], int):
             datos[k] = st.session_state[k]
-            
     try: 
         supabase.table("borradores_cotizacion").upsert({'usuario': 'Cristian', 'datos': datos}).execute()
     except Exception as e: print(f"Error borrador: {e}")
-    
     refrescar_carrito_global()
 
 def cargar_borrador():
@@ -492,8 +485,7 @@ def cargar_borrador():
 
 def eliminar_borrador():
     if not supabase: return
-    try: 
-        supabase.table("borradores_cotizacion").delete().eq("usuario", "Cristian").execute()
+    try: supabase.table("borradores_cotizacion").delete().eq("usuario", "Cristian").execute()
     except: pass
 
 def limpiar_sesiones():
@@ -782,7 +774,7 @@ elif (st.session_state.get('rol') == "Planificador" or st.session_state.usuario 
             desc = st.text_area("Instrucciones Específicas / Diagnóstico para Cristian")
             
             st.markdown("<br>", unsafe_allow_html=True)
-            enviar_noti = st.checkbox("📧 Enviar correo notificando a Cristian sobre esta cotización", value=False)
+            enviar_noti = st.checkbox("📧 Enviar alerta por correo a Cristian sobre este nuevo requerimiento", value=False)
             
             if st.button("Enviar Requerimiento al Taller ➡️", type="primary"):
                 if desc:
@@ -1050,8 +1042,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                             guardar_borrador()
                             st.rerun()
                             
-                # El carrito global ya se está dibujando en la barra lateral
-
                 st.markdown("---")
                 if st.button("Ir al Resumen Final y Generar PDF ➡️", type="primary", use_container_width=True):
                     st.session_state.sub_paso = 3
@@ -1080,13 +1070,14 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                     if st.button("💾 GUARDAR Y GENERAR PDF", type="primary", use_container_width=True):
                         with st.spinner("Generando Archivo en la Nube con Evidencia..."):
                             try:
-                                c_rut_fac_val = st.session_state.get('w_rut_fac', '')
-                                c_cli_fac_val = st.session_state.get('w_cli_fac', '')
-                                c_marca_val = st.session_state.get('w_marca', '--- Seleccione Marca ---')
-                                c_modelo_val = st.session_state.get('w_modelo', '---')
-                                c_us_final_val = st.session_state.get('w_us_final', '')
-                                c_origen_val = st.session_state.get('w_origen_sel', 'Kaufmann')
-                                c_tarifa_val = st.session_state.get('w_tarifa', 'Cliente Particular')
+                                # EXTRACCIÓN DESDE LA MEMORIA PROFUNDA 'c_' (CORRECCIÓN V21)
+                                c_rut_fac_val = st.session_state.get('c_rut_fac', '')
+                                c_cli_fac_val = st.session_state.get('c_cli_fac', '')
+                                c_marca_val = st.session_state.get('c_marca', '--- Seleccione Marca ---')
+                                c_modelo_val = st.session_state.get('c_modelo', '---')
+                                c_us_final_val = st.session_state.get('c_us_final', '')
+                                c_origen_val = st.session_state.get('c_origen', 'Kaufmann')
+                                c_tarifa_val = st.session_state.get('c_tarifa', 'Cliente Particular')
                                 c_nsap_val = st.session_state.get('c_nsap', '')
 
                                 pat_oficial = formatear_patente(p_in)
@@ -1150,7 +1141,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                     with st.expander("✉️ Enviar por Correo Electrónico al Cliente", expanded=True):
                         
                         num_pres = d['nombre'].replace('Presupuesto_', '').split('_')[0]
-                        c_us_final_val = st.session_state.get('w_us_final', '')
+                        c_us_final_val = st.session_state.get('c_us_final', '')
                         pat_formateada = formatear_patente(p_in)
                         
                         asunto_def = f"{pat_formateada} - {c_us_final_val} - Presupuesto {num_pres} - C.H. Servicio Automotriz"
@@ -1158,7 +1149,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                         
                         e_ms = st.text_area("Mensaje:", value=f"Estimado(a),\n\nAdjunto enviamos el presupuesto solicitado para la patente {pat_formateada}.\n\nSaludos cordiales.")
                         
-                        # DIRECTORIO DE CORREOS VISIBLE PARA TODOS LOS CLIENTES
                         dir_c = cargar_directorio_correos()
                         d_sel = st.multiselect("Contactos Frecuentes (Directorio):", options=list(dir_c.keys()), default=[])
                         e_ad = st.text_input("Correos Adicionales (separados por coma):")
@@ -1249,7 +1239,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                             num_pres = str(r['id_cotizacion'])
                             asunto_def = f"{pat_f} - {us_final} - Presupuesto {num_pres} - C.H. Servicio Automotriz"
                             e_as = st.text_input("Asunto:", value=asunto_def.upper(), key=f"as_{num_pres}")
-                            e_ms = st.text_area("Mensaje:", value=f"Estimado(a),\n\nAdjunto enviamos el presupuesto solicitado para la patente {pat_f}.\n\nSaludos cordiales.", key=f"ms_{num_pres}")
+                            e_ms = st.text_area("Mensaje:", value=f"Estimado(a),\n\nAdjunto enviamos el presupuesto solicitado para la patente {pat_formateada}.\n\nSaludos cordiales.", key=f"ms_{num_pres}")
                             
                             dir_c = cargar_directorio_correos()
                             d_sel = st.multiselect("Contactos Frecuentes (Directorio):", options=list(dir_c.keys()), default=[], key=f"msel_{num_pres}")
