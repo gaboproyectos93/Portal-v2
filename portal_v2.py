@@ -427,11 +427,9 @@ def extraer_historial_completo():
         return pd.DataFrame(res.data) if res.data else pd.DataFrame()
     except: return pd.DataFrame()
 
-# ---- NUEVA FUNCIÓN PARA RECONSTRUIR EL CARRITO GLOBAL EN MEMORIA ----
 def refrescar_carrito_global():
     sel_final = []
     
-    # 1. Matriz
     col_tarifa = MAPEO_TARIFAS.get(st.session_state.get('c_tarifa', ''), "costo_ssas")
     if not DF_PRECIOS.empty and 'categoria' in DF_PRECIOS.columns:
         for idx, row in DF_PRECIOS.iterrows():
@@ -441,7 +439,6 @@ def refrescar_carrito_global():
                 except: p = 0
                 sel_final.append({"Tipo": "matriz", "Descripción": row['trabajo'], "Cantidad": st.session_state[k], "Unitario_Costo": p, "Total_Costo": p * st.session_state[k], "Llave": k})
     
-    # 2. Manuales y Repuestos
     if 'lista_particular' in st.session_state: sel_final.extend(st.session_state.lista_particular)
     if 'lista_repuestos' in st.session_state: sel_final.extend(st.session_state.lista_repuestos)
     
@@ -483,7 +480,6 @@ def guardar_borrador(*args, **kwargs):
         supabase.table("borradores_cotizacion").upsert({'usuario': 'Cristian', 'datos': datos}).execute()
     except Exception as e: print(f"Error borrador: {e}")
     
-    # Cada vez que guardamos borrador, actualizamos el carrito visual global
     refrescar_carrito_global()
 
 def cargar_borrador():
@@ -613,7 +609,6 @@ with st.sidebar:
             st.rerun()
         st.markdown("---")
         
-        # MÓDULO DE CARRITO GLOBAL EN LA BARRA LATERAL PARA CRISTIAN
         if st.session_state.get('vista_taller') == "Cotizador" and st.session_state.get('sub_paso', 0) > 0:
             st.markdown("### 🛒 Resumen en Vivo")
             refrescar_carrito_global()
@@ -787,7 +782,7 @@ elif (st.session_state.get('rol') == "Planificador" or st.session_state.usuario 
             desc = st.text_area("Instrucciones Específicas / Diagnóstico para Cristian")
             
             st.markdown("<br>", unsafe_allow_html=True)
-            enviar_noti = st.checkbox("📧 Enviar alerta por correo a Cristian sobre este nuevo requerimiento", value=False)
+            enviar_noti = st.checkbox("📧 Enviar correo notificando a Cristian sobre esta cotización", value=False)
             
             if st.button("Enviar Requerimiento al Taller ➡️", type="primary"):
                 if desc:
@@ -811,6 +806,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
     if st.session_state.vista_taller == "Bandeja":
         st.title("📥 Bandeja de Entrada")
         
+        # EL BORRADOR SOLO SE VERIFICA Y APARECE AQUÍ EN LA BANDEJA
         if 'borrador_check' not in st.session_state:
             st.session_state.borrador_check = True
             
@@ -1054,8 +1050,8 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                             guardar_borrador()
                             st.rerun()
                             
-                # Aunque estemos en el paso 2, el carrito global a la izquierda maneja lo que se muestra
-                
+                # El carrito global ya se está dibujando en la barra lateral
+
                 st.markdown("---")
                 if st.button("Ir al Resumen Final y Generar PDF ➡️", type="primary", use_container_width=True):
                     st.session_state.sub_paso = 3
@@ -1162,7 +1158,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                         
                         e_ms = st.text_area("Mensaje:", value=f"Estimado(a),\n\nAdjunto enviamos el presupuesto solicitado para la patente {pat_formateada}.\n\nSaludos cordiales.")
                         
-                        # DIRECTORIO UNIVERSAL PARA CUALQUIER TIPO DE CLIENTE
+                        # DIRECTORIO DE CORREOS VISIBLE PARA TODOS LOS CLIENTES
                         dir_c = cargar_directorio_correos()
                         d_sel = st.multiselect("Contactos Frecuentes (Directorio):", options=list(dir_c.keys()), default=[])
                         e_ad = st.text_input("Correos Adicionales (separados por coma):")
