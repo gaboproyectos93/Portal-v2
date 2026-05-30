@@ -427,6 +427,26 @@ def extraer_historial_completo():
         return pd.DataFrame(res.data) if res.data else pd.DataFrame()
     except: return pd.DataFrame()
 
+# ---- NUEVA FUNCIÓN PARA RECONSTRUIR EL CARRITO GLOBAL EN MEMORIA ----
+def refrescar_carrito_global():
+    sel_final = []
+    
+    # 1. Matriz
+    col_tarifa = MAPEO_TARIFAS.get(st.session_state.get('c_tarifa', ''), "costo_ssas")
+    if not DF_PRECIOS.empty and 'categoria' in DF_PRECIOS.columns:
+        for idx, row in DF_PRECIOS.iterrows():
+            k = f"q_{row['trabajo']}_{idx}"
+            if k in st.session_state and isinstance(st.session_state[k], int) and st.session_state[k] > 0:
+                try: p = float(row[col_tarifa])
+                except: p = 0
+                sel_final.append({"Tipo": "matriz", "Descripción": row['trabajo'], "Cantidad": st.session_state[k], "Unitario_Costo": p, "Total_Costo": p * st.session_state[k], "Llave": k})
+    
+    # 2. Manuales y Repuestos
+    if 'lista_particular' in st.session_state: sel_final.extend(st.session_state.lista_particular)
+    if 'lista_repuestos' in st.session_state: sel_final.extend(st.session_state.lista_repuestos)
+    
+    st.session_state.sel_final_cache = sel_final
+
 def guardar_borrador(*args, **kwargs):
     if not supabase or st.session_state.get('usuario') != "Cristian": return
     
@@ -462,6 +482,9 @@ def guardar_borrador(*args, **kwargs):
     try: 
         supabase.table("borradores_cotizacion").upsert({'usuario': 'Cristian', 'datos': datos}).execute()
     except Exception as e: print(f"Error borrador: {e}")
+    
+    # Cada vez que guardamos borrador, actualizamos el carrito visual global
+    refrescar_carrito_global()
 
 def cargar_borrador():
     if not supabase: return None
@@ -589,6 +612,35 @@ with st.sidebar:
             st.session_state.vista_taller = "Historial"
             st.rerun()
         st.markdown("---")
+        
+        # MÓDULO DE CARRITO GLOBAL EN LA BARRA LATERAL PARA CRISTIAN
+        if st.session_state.get('vista_taller') == "Cotizador" and st.session_state.get('sub_paso', 0) > 0:
+            st.markdown("### 🛒 Resumen en Vivo")
+            refrescar_carrito_global()
+            sel_g = st.session_state.get('sel_final_cache', [])
+            if sel_g:
+                tn_g = sum(x['Total_Costo'] for x in sel_g)
+                iv_g = tn_g * 0.19
+                tf_g = tn_g + iv_g
+                for idx, item in enumerate(sel_g):
+                    c_desc, c_tot, c_del = st.columns([5, 3, 1.5], vertical_alignment="center")
+                    c_desc.markdown(f"<small>{item['Cantidad']}x {item['Descripción']}</small>", unsafe_allow_html=True)
+                    c_tot.markdown(f"<small><b>{format_clp(item['Total_Costo'])}</b></small>", unsafe_allow_html=True)
+                    if item['Tipo'] == "matriz":
+                        c_del.button("🗑️", key=f"d_m_{item['Llave']}", on_click=cb_eliminar_matriz, args=(item['Llave'],))
+                    elif item['Tipo'] == "manual":
+                        if c_del.button("🗑️", key=f"d_ma_{idx}"):
+                            st.session_state.lista_particular.remove(item)
+                            guardar_borrador(); st.rerun()
+                    elif item['Tipo'] == "repuesto":
+                        if c_del.button("🗑️", key=f"d_re_{idx}"):
+                            st.session_state.lista_repuestos.remove(item)
+                            guardar_borrador(); st.rerun()
+                st.markdown("---")
+                st.markdown(f"**TOTAL: {format_clp(tf_g)}**")
+            else:
+                st.info("Carrito vacío")
+            st.markdown("---")
             
     elif st.session_state.get('rol') == "Planificador" or st.session_state.usuario == "Gabo":
         if st.button("🏠 Inicio / Dashboard", type="primary"): 
@@ -759,7 +811,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
     if st.session_state.vista_taller == "Bandeja":
         st.title("📥 Bandeja de Entrada")
         
-        # EL BORRADOR SOLO SE VERIFICA Y APARECE AQUÍ EN LA BANDEJA
         if 'borrador_check' not in st.session_state:
             st.session_state.borrador_check = True
             
@@ -1003,48 +1054,13 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                             guardar_borrador()
                             st.rerun()
                             
-                if 'lista_particular' in st.session_state: sel_final.extend(st.session_state.lista_particular)
-                if 'lista_repuestos' in st.session_state: sel_final.extend(st.session_state.lista_repuestos)
+                # Aunque estemos en el paso 2, el carrito global a la izquierda maneja lo que se muestra
                 
-                if sel_final:
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    st.markdown("<div class='carrito-container'>", unsafe_allow_html=True)
-                    st.markdown("### 🛒 Resumen del Carrito en Vivo")
-                    
-                    tn = sum(x['Total_Costo'] for x in sel_final)
-                    iv = tn * 0.19
-                    tf = tn + iv
-                    
-                    for idx, item in enumerate(sel_final):
-                        c_desc, c_cant, c_tot, c_del = st.columns([5, 1, 2, 1], vertical_alignment="center")
-                        c_desc.markdown(f"{item['Descripción']}")
-                        c_cant.markdown(f"x{item['Cantidad']}")
-                        c_tot.markdown(f"**{format_clp(item['Total_Costo'])}**")
-                        
-                        if item['Tipo'] == "matriz":
-                            c_del.button("🗑️", key=f"del_mat_{item['Llave']}", on_click=cb_eliminar_matriz, args=(item['Llave'],))
-                        elif item['Tipo'] == "manual":
-                            if c_del.button("🗑️", key=f"del_man_{idx}"):
-                                st.session_state.lista_particular.remove(item)
-                                guardar_borrador(); st.rerun()
-                        elif item['Tipo'] == "repuesto":
-                            if c_del.button("🗑️", key=f"del_rep_{idx}"):
-                                st.session_state.lista_repuestos.remove(item)
-                                guardar_borrador(); st.rerun()
-                                
-                    st.markdown("---")
-                    c_s1, c_s2, c_s3 = st.columns(3)
-                    c_s1.metric("SUB TOTAL", format_clp(tn))
-                    c_s2.metric("I.V.A.", format_clp(iv))
-                    c_s3.metric("TOTAL A COBRAR", format_clp(tf))
-                    st.markdown("</div><br>", unsafe_allow_html=True)
-                    
-                    st.session_state.sel_final_cache = sel_final 
-                    
-                    if st.button("Ir al Resumen Final y Generar PDF ➡️", type="primary", use_container_width=True):
-                        st.session_state.sub_paso = 3
-                        guardar_borrador()
-                        st.rerun()
+                st.markdown("---")
+                if st.button("Ir al Resumen Final y Generar PDF ➡️", type="primary", use_container_width=True):
+                    st.session_state.sub_paso = 3
+                    guardar_borrador()
+                    st.rerun()
 
             elif st.session_state.sub_paso == 3:
                 st.header("Paso 3: Emisión de Documento")
@@ -1146,7 +1162,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                         
                         e_ms = st.text_area("Mensaje:", value=f"Estimado(a),\n\nAdjunto enviamos el presupuesto solicitado para la patente {pat_formateada}.\n\nSaludos cordiales.")
                         
-                        # MENÚ DE CORREO UNIFICADO (Siempre muestra la libreta de contactos)
+                        # DIRECTORIO UNIVERSAL PARA CUALQUIER TIPO DE CLIENTE
                         dir_c = cargar_directorio_correos()
                         d_sel = st.multiselect("Contactos Frecuentes (Directorio):", options=list(dir_c.keys()), default=[])
                         e_ad = st.text_input("Correos Adicionales (separados por coma):")
@@ -1155,6 +1171,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                             lc = [dir_c[n] for n in d_sel]
                             if e_ad: lc.extend([e.strip() for e in e_ad.split(',') if e.strip()])
                             dfinal = ", ".join(lc)
+                            
                             if dfinal:
                                 with st.spinner("Enviando..."):
                                     ex, m = enviar_correo(dfinal, e_as, e_ms, d['pdf'], d['nombre'], EMAIL_SISTEMA)
@@ -1162,7 +1179,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                                     sol_id = st.session_state.get('sol_activa')
                                     id_a_actualizar = sol_id if sol_id else int(num_pres)
                                     supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", id_a_actualizar).execute()
-                                    st.success("✅ Enviado exitosamente.")
+                                    st.success("✅ Enviado exitosamente. Actualizando estado de la orden...")
                                     time.sleep(1.5)
                                     limpiar_sesiones()
                                     st.session_state.vista_taller = "Historial"
