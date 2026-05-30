@@ -764,7 +764,7 @@ elif (st.session_state.get('rol') == "Planificador" or st.session_state.usuario 
             nom_contacto = "Gabriel Poblete"
             dir_c = cargar_directorio_correos()
             correo_contacto = dir_c.get(nom_contacto, "gabriel.poblete@kaufmann.cl")
-            tel_contacto = "+56999097417"
+            tel_contacto = "56999097417"
             
             c1, c2, c3 = st.columns(3)
             st.text_input("Nombre de Contacto", value=nom_contacto, disabled=True)
