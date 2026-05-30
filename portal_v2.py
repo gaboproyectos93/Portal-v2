@@ -430,7 +430,6 @@ def extraer_historial_completo():
 def guardar_borrador(*args, **kwargs):
     if not supabase or st.session_state.get('usuario') != "Cristian": return
     
-    # Extraemos de forma segura sin romper Streamlit
     pat = st.session_state.get('c_patente_in') or st.session_state.get('c_patente', '')
     ori = st.session_state.get('w_origen_sel') or st.session_state.get('c_origen', '')
     mar = st.session_state.get('w_marca') or st.session_state.get('c_marca', '')
@@ -515,7 +514,6 @@ if st.session_state.usuario is None:
                     usuarios_bd = [u['nombre'] for u in res_users.data]
             except Exception as e: pass
             
-        # Salvavidas de emergencia: Si la DB no responde o está vacía, forzamos estos dos
         if not usuarios_bd:
             usuarios_bd = ["Gabo", "Cristian"]
             
@@ -546,7 +544,6 @@ if st.session_state.usuario is None:
                             login_exitoso = True
                     except Exception as e: pass
                     
-                    # Salvavidas de autenticación local si Supabase falla
                     if not login_exitoso:
                         if p_sel == "Gabo" and pass_in == "gabo2026":
                             st.session_state.usuario = "Gabo"
@@ -737,11 +734,17 @@ elif (st.session_state.get('rol') == "Planificador" or st.session_state.usuario 
             
             desc = st.text_area("Instrucciones Específicas / Diagnóstico para Cristian")
             
+            st.markdown("<br>", unsafe_allow_html=True)
+            enviar_noti = st.checkbox("📧 Enviar alerta por correo a Cristian sobre este nuevo requerimiento", value=False)
+            
             if st.button("Enviar Requerimiento al Taller ➡️", type="primary"):
                 if desc:
                     if registrar_solicitud_gabo(pat_str, nom_contacto, tel_contacto, correo_contacto, "Kaufmann", g_dest_txt, g_tarifa_sel, desc, g_nsap, g_marca_sel, g_modelo_sel):
-                        notificar_cristian_nueva_ot(pat_str, g_marca_sel, g_modelo_sel, g_dest_txt, desc)
-                        st.success("🚀 Asignado exitosamente. Se ha notificado a Cristian por correo.")
+                        if enviar_noti:
+                            notificar_cristian_nueva_ot(pat_str, g_marca_sel, g_modelo_sel, g_dest_txt, desc)
+                            st.success("🚀 Asignado exitosamente. Se ha notificado a Cristian por correo.")
+                        else:
+                            st.success("🚀 Asignado exitosamente en la plataforma (Sin alerta por correo).")
                         time.sleep(1.8)
                         limpiar_sesiones()
                         st.session_state.vista_gabo = "Dashboard"
@@ -753,31 +756,33 @@ elif (st.session_state.get('rol') == "Planificador" or st.session_state.usuario 
 # ==========================================
 elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cristian") and st.session_state.get('vista_taller') != "IA":
     
-    if 'borrador_check' not in st.session_state:
-        st.session_state.borrador_check = True
-        
-    datos_recuperados = cargar_borrador()
-    if datos_recuperados:
-        st.session_state.hay_borrador = datos_recuperados
-            
-    if st.session_state.get('hay_borrador'):
-        st.markdown(f"""<div class="card-borrador"><h4>⚠️ Tienes una cotización en pausa (Patente: {formatear_patente(st.session_state.hay_borrador.get('c_patente', 'S/P'))})</h4></div>""", unsafe_allow_html=True)
-        c_a, c_b = st.columns(2)
-        if c_a.button("✅ Recuperar Trabajo", use_container_width=True):
-            b = st.session_state.hay_borrador
-            for k, v in b.items(): st.session_state[k] = v
-            st.session_state.vista_taller = "Cotizador"
-            del st.session_state['hay_borrador']
-            st.session_state.borrador_check = True
-            st.rerun()
-        if c_b.button("🗑️ Descartar y Empezar de Cero", use_container_width=True):
-            eliminar_borrador()
-            del st.session_state['hay_borrador']
-            st.rerun()
-        st.markdown("---")
-
     if st.session_state.vista_taller == "Bandeja":
         st.title("📥 Bandeja de Entrada")
+        
+        # EL BORRADOR SOLO SE VERIFICA Y APARECE AQUÍ EN LA BANDEJA
+        if 'borrador_check' not in st.session_state:
+            st.session_state.borrador_check = True
+            
+        datos_recuperados = cargar_borrador()
+        if datos_recuperados:
+            st.session_state.hay_borrador = datos_recuperados
+                
+        if st.session_state.get('hay_borrador'):
+            st.markdown(f"""<div class="card-borrador"><h4>⚠️ Tienes una cotización en pausa (Patente: {formatear_patente(st.session_state.hay_borrador.get('c_patente', 'S/P'))})</h4></div>""", unsafe_allow_html=True)
+            c_a, c_b = st.columns(2)
+            if c_a.button("✅ Recuperar Trabajo", use_container_width=True):
+                b = st.session_state.hay_borrador
+                for k, v in b.items(): st.session_state[k] = v
+                st.session_state.vista_taller = "Cotizador"
+                del st.session_state['hay_borrador']
+                st.session_state.borrador_check = True
+                st.rerun()
+            if c_b.button("🗑️ Descartar y Empezar de Cero", use_container_width=True):
+                eliminar_borrador()
+                del st.session_state['hay_borrador']
+                st.rerun()
+            st.markdown("---")
+
         df_todo = extraer_historial_completo()
         
         df_dir = pd.DataFrame()
@@ -895,7 +900,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                 cv1.selectbox("Marca", list(CATALOGO.keys()), index=idx_marca, on_change=guardar_borrador, key="w_marca")
                 st.session_state['c_marca'] = st.session_state.get('w_marca', '--- Seleccione Marca ---')
                 
-                mod_disp = CATALOGO[st.session_state.get('c_marca', '--- Seleccione Marca ---')] if st.session_state.get('c_marca') != "--- Seleccione Marca ---" else ["---"]
+                mod_disp = CATALOGO[st.session_state.get('w_marca', '--- Seleccione Marca ---')] if st.session_state.get('w_marca') != "--- Seleccione Marca ---" else ["---"]
                 modelo_bd = st.session_state.get('c_modelo') or (datos_v.get('modelo') if datos_v else None)
                 idx_mod = mod_disp.index(modelo_bd) if modelo_bd in mod_disp else 0
                 cv2.selectbox("Modelo", mod_disp, index=idx_mod, on_change=guardar_borrador, key="w_modelo")
@@ -1141,47 +1146,29 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                         
                         e_ms = st.text_area("Mensaje:", value=f"Estimado(a),\n\nAdjunto enviamos el presupuesto solicitado para la patente {pat_formateada}.\n\nSaludos cordiales.")
                         
-                        if st.session_state.get('w_origen_sel', '') == "Kaufmann":
-                            dir_c = cargar_directorio_correos()
-                            d_sel = st.multiselect("Contactos Frecuentes Kaufmann:", options=list(dir_c.keys()), default=[])
-                            e_ad = st.text_input("Correos Adicionales (separados por coma):")
-                            
-                            if st.button("📤 Enviar Correo a Kaufmann", type="primary"):
-                                lc = [dir_c[n] for n in d_sel]
-                                if e_ad: lc.extend([e.strip() for e in e_ad.split(',') if e.strip()])
-                                dfinal = ", ".join(lc)
-                                if dfinal:
-                                    with st.spinner("Enviando..."):
-                                        ex, m = enviar_correo(dfinal, e_as, e_ms, d['pdf'], d['nombre'], EMAIL_SISTEMA)
-                                    if ex:
-                                        sol_id = st.session_state.get('sol_activa')
-                                        id_a_actualizar = sol_id if sol_id else int(num_pres)
-                                        supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", id_a_actualizar).execute()
-                                        st.success("✅ Enviado exitosamente. Actualizando bandeja...")
-                                        time.sleep(1.5)
-                                        limpiar_sesiones()
-                                        st.session_state.vista_taller = "Historial"
-                                        st.rerun()
-                                    else: st.error(f"❌ {m}")
-                                else: st.warning("Ingresa un destinatario.")
+                        # MENÚ DE CORREO UNIFICADO (Siempre muestra la libreta de contactos)
+                        dir_c = cargar_directorio_correos()
+                        d_sel = st.multiselect("Contactos Frecuentes (Directorio):", options=list(dir_c.keys()), default=[])
+                        e_ad = st.text_input("Correos Adicionales (separados por coma):")
                         
-                        else:
-                            e_ad_propio = st.text_input("Ingresa el correo de tu cliente (separados por coma si son varios):")
-                            if st.button("📤 Enviar Correo Privado", type="primary"):
-                                if e_ad_propio:
-                                    with st.spinner("Enviando..."):
-                                        ex, m = enviar_correo(e_ad_propio.strip(), e_as, e_ms, d['pdf'], d['nombre'], EMAIL_SISTEMA)
-                                    if ex:
-                                        sol_id = st.session_state.get('sol_activa')
-                                        id_a_actualizar = sol_id if sol_id else int(num_pres)
-                                        supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", id_a_actualizar).execute()
-                                        st.success("✅ Enviado exitosamente a tu cliente.")
-                                        time.sleep(1.5)
-                                        limpiar_sesiones()
-                                        st.session_state.vista_taller = "Historial" 
-                                        st.rerun()
-                                    else: st.error(f"❌ {m}")
-                                else: st.warning("Debes ingresar el correo del cliente.")
+                        if st.button("📤 Enviar Correo al Cliente", type="primary"):
+                            lc = [dir_c[n] for n in d_sel]
+                            if e_ad: lc.extend([e.strip() for e in e_ad.split(',') if e.strip()])
+                            dfinal = ", ".join(lc)
+                            if dfinal:
+                                with st.spinner("Enviando..."):
+                                    ex, m = enviar_correo(dfinal, e_as, e_ms, d['pdf'], d['nombre'], EMAIL_SISTEMA)
+                                if ex:
+                                    sol_id = st.session_state.get('sol_activa')
+                                    id_a_actualizar = sol_id if sol_id else int(num_pres)
+                                    supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", id_a_actualizar).execute()
+                                    st.success("✅ Enviado exitosamente.")
+                                    time.sleep(1.5)
+                                    limpiar_sesiones()
+                                    st.session_state.vista_taller = "Historial"
+                                    st.rerun()
+                                else: st.error(f"❌ {m}")
+                            else: st.warning("Debes seleccionar al menos un destinatario de la lista o ingresar uno manualmente.")
 
                     st.markdown("---")
                     if st.button("🏠 Finalizar y Volver al Inicio", type="primary"):
@@ -1251,42 +1238,26 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                             e_as = st.text_input("Asunto:", value=asunto_def.upper(), key=f"as_{num_pres}")
                             e_ms = st.text_area("Mensaje:", value=f"Estimado(a),\n\nAdjunto enviamos el presupuesto solicitado para la patente {pat_f}.\n\nSaludos cordiales.", key=f"ms_{num_pres}")
                             
-                            if r.get('origen_trabajo') == 'Kaufmann':
-                                dir_c = cargar_directorio_correos()
-                                d_sel = st.multiselect("Contactos Frecuentes Kaufmann:", options=list(dir_c.keys()), default=[], key=f"msel_{num_pres}")
-                                e_ad = st.text_input("Correos Adicionales (separados por coma):", key=f"ad_{num_pres}")
-                                
-                                if st.button("📤 Enviar Correo a Kaufmann", type="primary", key=f"btn_env_{num_pres}"):
-                                    lc = [dir_c[n] for n in d_sel]
-                                    if e_ad: lc.extend([e.strip() for e in e_ad.split(',') if e.strip()])
-                                    dfinal = ", ".join(lc)
-                                    if dfinal:
-                                        with st.spinner("Descargando PDF y Enviando..."):
-                                            pdf_bytes = requests.get(url_pdf).content
-                                            n_pdf = f"Presupuesto_{num_pres}.pdf"
-                                            ex, m = enviar_correo(dfinal, e_as, e_ms, pdf_bytes, n_pdf, EMAIL_SISTEMA)
-                                        if ex:
-                                            supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
-                                            st.success("✅ Enviado exitosamente.")
-                                            time.sleep(1.5)
-                                            st.rerun()
-                                        else: st.error(f"❌ {m}")
-                                    else: st.warning("Ingresa un destinatario.")
-                            else:
-                                e_ad_propio = st.text_input("Ingresa el correo de tu cliente:", key=f"adp_{num_pres}")
-                                if st.button("📤 Enviar Correo Privado", type="primary", key=f"btn_envp_{num_pres}"):
-                                    if e_ad_propio:
-                                        with st.spinner("Descargando PDF y Enviando..."):
-                                            pdf_bytes = requests.get(url_pdf).content
-                                            n_pdf = f"Presupuesto_{num_pres}.pdf"
-                                            ex, m = enviar_correo(e_ad_propio.strip(), e_as, e_ms, pdf_bytes, n_pdf, EMAIL_SISTEMA)
-                                        if ex:
-                                            supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
-                                            st.success("✅ Enviado exitosamente a tu cliente.")
-                                            time.sleep(1.5)
-                                            st.rerun()
-                                        else: st.error(f"❌ {m}")
-                                    else: st.warning("Debes ingresar el correo del cliente.")
+                            dir_c = cargar_directorio_correos()
+                            d_sel = st.multiselect("Contactos Frecuentes (Directorio):", options=list(dir_c.keys()), default=[], key=f"msel_{num_pres}")
+                            e_ad = st.text_input("Correos Adicionales (separados por coma):", key=f"ad_{num_pres}")
+                            
+                            if st.button("📤 Enviar Correo", type="primary", key=f"btn_env_{num_pres}"):
+                                lc = [dir_c[n] for n in d_sel]
+                                if e_ad: lc.extend([e.strip() for e in e_ad.split(',') if e.strip()])
+                                dfinal = ", ".join(lc)
+                                if dfinal:
+                                    with st.spinner("Descargando PDF y Enviando..."):
+                                        pdf_bytes = requests.get(url_pdf).content
+                                        n_pdf = f"Presupuesto_{num_pres}.pdf"
+                                        ex, m = enviar_correo(dfinal, e_as, e_ms, pdf_bytes, n_pdf, EMAIL_SISTEMA)
+                                    if ex:
+                                        supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
+                                        st.success("✅ Enviado exitosamente.")
+                                        time.sleep(1.5)
+                                        st.rerun()
+                                    else: st.error(f"❌ {m}")
+                                else: st.warning("Debes seleccionar al menos un destinatario de la lista o ingresar uno manualmente.")
 
             with t2:
                 df_env = df_view[df_view['estado'] == 'Enviado']
