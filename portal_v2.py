@@ -393,7 +393,6 @@ def registrar_solicitud_gabo(patente, contacto, telefono, correo, origen, destin
     try:
         pat_oficial = formatear_patente(patente)
         if pat_oficial != "S/P":
-            # Eliminamos el registro de contacto, teléfono y correo en el directorio maestro (V24)
             upsert_data = {
                 "patente": pat_oficial, 
                 "origen_cliente": origen, "cliente_final": destino_txt, "tipo_cliente": tarifa_math
@@ -402,7 +401,6 @@ def registrar_solicitud_gabo(patente, contacto, telefono, correo, origen, destin
             if modelo and modelo != "---": upsert_data["modelo"] = modelo
             supabase.table("directorio_vehiculos").upsert(upsert_data).execute()
         
-        # Mantenemos contacto_gestion en historial_trabajos solo para trazabilidad (saber que fue Gabo)
         supabase.table("historial_trabajos").insert({
             "patente": pat_oficial if pat_oficial != "S/P" else None,
             "origen_trabajo": origen, "usuario_final": destino_txt, "tarifa_aplicada": tarifa_math,
@@ -431,7 +429,6 @@ def extraer_historial_completo():
 def refrescar_carrito_global():
     sel_final = []
     
-    # 1. Recuperar Matriz
     if st.session_state.get('sub_paso') == 2:
         col_tarifa = MAPEO_TARIFAS.get(st.session_state.get('c_tarifa', ''), "costo_ssas")
         if not DF_PRECIOS.empty and 'categoria' in DF_PRECIOS.columns:
@@ -447,7 +444,6 @@ def refrescar_carrito_global():
             if item['Tipo'] == 'matriz':
                 sel_final.append(item)
                 
-    # 2. Recuperar Manuales y Repuestos
     if 'lista_particular' in st.session_state: sel_final.extend(st.session_state.lista_particular)
     if 'lista_repuestos' in st.session_state: sel_final.extend(st.session_state.lista_repuestos)
     
@@ -619,7 +615,6 @@ with st.sidebar:
             st.rerun()
         st.markdown("---")
         
-        # MÓDULO DE CARRITO GLOBAL EN LA BARRA LATERAL PARA CRISTIAN
         if st.session_state.get('vista_taller') == "Cotizador" and st.session_state.get('sub_paso', 0) > 0:
             st.markdown("### 🛒 Resumen en Vivo")
             refrescar_carrito_global()
@@ -815,7 +810,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
     if st.session_state.vista_taller == "Bandeja":
         st.title("📥 Bandeja de Entrada")
         
-        # EL BORRADOR SOLO SE VERIFICA Y APARECE AQUÍ EN LA BANDEJA
         if 'borrador_check' not in st.session_state:
             st.session_state.borrador_check = True
             
@@ -970,7 +964,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
 
             elif st.session_state.sub_paso == 2:
                 
-                # ¡CURA PARA LA AMNESIA DE STREAMLIT (MATRIZ)!
                 if 'sel_final_cache' in st.session_state:
                     for item in st.session_state.sel_final_cache:
                         if item['Tipo'] == 'matriz' and item['Llave'] not in st.session_state:
@@ -993,7 +986,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                 
                 col_tarifa_a_buscar = MAPEO_TARIFAS.get(st.session_state.get('c_tarifa'), "costo_ssas")
                 
-                # REGLA DE EXCLUSIVIDAD PARA "CLÍNICA MÓVIL"
+                # REGLA EXCLUSIVA PARA CLÍNICA MÓVIL
                 es_cliente_privado = (st.session_state.get('c_origen') == "Propio Cristian")
                 
                 cat_disp = []
@@ -1009,7 +1002,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                 
                 tabs_cat = st.tabs(tabs_names)
                 
-                # 1. Pestañas de la Matriz Normal
                 for i, cat in enumerate(cat_disp):
                     with tabs_cat[i]:
                         df_cat = DF_PRECIOS[DF_PRECIOS['categoria'] == cat].copy()
@@ -1026,7 +1018,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                                 p = float(row[col_tarifa_a_buscar])
                                 cc3.markdown(f"**{format_clp(p)}**")
                 
-                # 2. Pestaña de Trabajo Manual
                 idx_manual = len(cat_disp)
                 with tabs_cat[idx_manual]:
                     cm1, cm2 = st.columns([6, 2], vertical_alignment="center")
@@ -1056,7 +1047,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                                     time.sleep(0.5)
                                     st.rerun()
 
-                # 3. Pestaña de Repuestos
                 idx_rep = len(cat_disp) + 1
                 with tabs_cat[idx_rep]:
                     cr1, cr2 = st.columns([3, 1])
@@ -1077,7 +1067,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                             time.sleep(0.5)
                             st.rerun()
                             
-                # 4. Pestaña EXCLUSIVA Clínica Móvil (Excel Integrado)
+                # MÓDULO DE CLÍNICA MÓVIL (EXCEL INTEGRADO)
                 if es_cliente_privado:
                     idx_clinica = len(cat_disp) + 2
                     with tabs_cat[idx_clinica]:
@@ -1151,7 +1141,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                     if st.button("💾 GUARDAR Y GENERAR PDF", type="primary", use_container_width=True):
                         with st.spinner("Generando Archivo en la Nube con Evidencia..."):
                             try:
-                                # EXTRACCIÓN DESDE LA MEMORIA PROFUNDA 'c_'
                                 c_rut_fac_val = st.session_state.get('c_rut_fac', '')
                                 c_cli_fac_val = st.session_state.get('c_cli_fac', '')
                                 c_marca_val = st.session_state.get('c_marca', '--- Seleccione Marca ---')
@@ -1320,7 +1309,9 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                             num_pres = str(r['id_cotizacion'])
                             asunto_def = f"{pat_f} - {us_final} - Presupuesto {num_pres} - C.H. Servicio Automotriz"
                             e_as = st.text_input("Asunto:", value=asunto_def.upper(), key=f"as_{num_pres}")
-                            e_ms = st.text_area("Mensaje:", value=f"Estimado(a),\n\nAdjunto enviamos el presupuesto solicitado para la patente {pat_formateada}.\n\nSaludos cordiales.", key=f"ms_{num_pres}")
+                            
+                            # AQUÍ SE CORRIGIÓ EL ERROR (pat_formateada por pat_f)
+                            e_ms = st.text_area("Mensaje:", value=f"Estimado(a),\n\nAdjunto enviamos el presupuesto solicitado para la patente {pat_f}.\n\nSaludos cordiales.", key=f"ms_{num_pres}")
                             
                             dir_c = cargar_directorio_correos()
                             d_sel = st.multiselect("Contactos Frecuentes (Directorio):", options=list(dir_c.keys()), default=[], key=f"msel_{num_pres}")
