@@ -432,7 +432,6 @@ def refrescar_carrito_global():
     
     # 1. Recuperar Matriz
     if st.session_state.get('sub_paso') == 2:
-        # Si estamos en el paso 2, leemos desde los widgets activos
         col_tarifa = MAPEO_TARIFAS.get(st.session_state.get('c_tarifa', ''), "costo_ssas")
         if not DF_PRECIOS.empty and 'categoria' in DF_PRECIOS.columns:
             for idx, row in DF_PRECIOS.iterrows():
@@ -442,7 +441,6 @@ def refrescar_carrito_global():
                     except: p = 0
                     sel_final.append({"Tipo": "matriz", "Descripción": row['trabajo'], "Cantidad": st.session_state[k], "Unitario_Costo": p, "Total_Costo": p * st.session_state[k], "Llave": k})
     else:
-        # Si NO estamos en el paso 2 (ej. en el PDF), leemos de la memoria oculta para que no se borren
         cache_antigua = st.session_state.get('sel_final_cache', [])
         for item in cache_antigua:
             if item['Tipo'] == 'matriz':
@@ -488,7 +486,6 @@ def guardar_borrador(*args, **kwargs):
     except Exception as e: print(f"Error borrador: {e}")
     refrescar_carrito_global()
 
-# Nueva función para el trigger visual al cambiar cantidades en la matriz
 def cb_actualizar_matriz():
     st.toast("✅ Carrito actualizado", icon="🔄")
     guardar_borrador()
@@ -510,7 +507,7 @@ def limpiar_sesiones():
     claves_a_borrar = [
         'sol_activa', 'sub_paso', 'c_patente', 'c_origen', 'c_cli_fac', 'c_rut_fac', 
         'c_us_final', 'c_marca', 'c_modelo', 'c_tarifa', 'c_nsap', 'lista_particular', 
-        'lista_repuestos', 'presupuesto_generado', 'sel_final_cache',
+        'lista_repuestos', 'presupuesto_generado', 'sel_final_cache', 'df_proyectos',
         'g_patente', 'g_vehiculo_existe', 'g_marca', 'g_modelo', 'g_dest_txt', 
         'g_tarifa', 'g_nsap', 'hay_borrador', 'borrador_check', 'c_patente_in'
     ]
@@ -522,7 +519,6 @@ def limpiar_sesiones():
 
 def cb_eliminar_matriz(llave):
     st.session_state[llave] = 0
-    # Eliminación profunda desde el caché para que funcione en cualquier paso
     if 'sel_final_cache' in st.session_state:
         st.session_state.sel_final_cache = [x for x in st.session_state.sel_final_cache if x.get('Llave') != llave]
     guardar_borrador()
@@ -629,7 +625,6 @@ with st.sidebar:
             sel_g = st.session_state.get('sel_final_cache', [])
             if sel_g:
                 tn_g = sum(x['Total_Costo'] for x in sel_g)
-                # Modificado visualmente para que el basurero quede centrado
                 for idx, item in enumerate(sel_g):
                     c_desc, c_tot, c_del = st.columns([5, 3, 2], vertical_alignment="center")
                     c_desc.markdown(f"<small>{item['Cantidad']}x {item['Descripción']}</small>", unsafe_allow_html=True)
@@ -645,7 +640,6 @@ with st.sidebar:
                             st.session_state.lista_repuestos.remove(item)
                             guardar_borrador(); st.rerun()
                 st.markdown("---")
-                # Exclusivo: Muestra solo el Total Neto en el Carrito Lateral
                 st.markdown(f"**TOTAL NETO: {format_clp(tn_g)}**")
             else:
                 st.info("Carrito vacío")
@@ -974,8 +968,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
 
             elif st.session_state.sub_paso == 2:
                 
-                # ¡CURA PARA LA AMNESIA DE STREAMLIT! 
-                # Antes de mostrar los botones, inyectamos en memoria lo que estaba en el carrito
+                # ¡CURA PARA LA AMNESIA DE STREAMLIT (MATRIZ)!
                 if 'sel_final_cache' in st.session_state:
                     for item in st.session_state.sel_final_cache:
                         if item['Tipo'] == 'matriz' and item['Llave'] not in st.session_state:
@@ -998,17 +991,23 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                 
                 col_tarifa_a_buscar = MAPEO_TARIFAS.get(st.session_state.get('c_tarifa'), "costo_ssas")
                 
-                if st.session_state.get('c_tarifa') == "Cliente Particular":
-                    cat_disp = []
-                    tabs_cat = st.tabs(["📝 Manual", "🛒 Repuestos"])
-                elif not DF_PRECIOS.empty and 'categoria' in DF_PRECIOS.columns:
-                    cat_disp = sorted(DF_PRECIOS['categoria'].dropna().unique().tolist())
-                    nombres_tabs = [f"{EMOJIS_CAT.get(c, '🔧')} {c}" for c in cat_disp]
-                    tabs_cat = st.tabs(nombres_tabs + ["📝 Manual", "🛒 Repuestos"])
-                else:
-                    cat_disp = []
-                    tabs_cat = st.tabs(["📝 Manual", "🛒 Repuestos"])
+                # REGLA DE EXCLUSIVIDAD PARA "CLÍNICA MÓVIL"
+                es_cliente_privado = (st.session_state.get('c_origen') == "Propio Cristian")
                 
+                cat_disp = []
+                if st.session_state.get('c_tarifa') != "Cliente Particular":
+                    if not DF_PRECIOS.empty and 'categoria' in DF_PRECIOS.columns:
+                        cat_disp = sorted(DF_PRECIOS['categoria'].dropna().unique().tolist())
+                
+                tabs_names = [f"{EMOJIS_CAT.get(c, '🔧')} {c}" for c in cat_disp]
+                tabs_names.extend(["📝 Manual", "🛒 Repuestos"])
+                
+                if es_cliente_privado:
+                    tabs_names.append("🚑 Clínica Móvil (Excel)")
+                
+                tabs_cat = st.tabs(tabs_names)
+                
+                # 1. Pestañas de la Matriz Normal
                 for i, cat in enumerate(cat_disp):
                     with tabs_cat[i]:
                         df_cat = DF_PRECIOS[DF_PRECIOS['categoria'] == cat].copy()
@@ -1025,7 +1024,8 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                                 p = float(row[col_tarifa_a_buscar])
                                 cc3.markdown(f"**{format_clp(p)}**")
                 
-                idx_manual = -2 if cat_disp else 0
+                # 2. Pestaña de Trabajo Manual
+                idx_manual = len(cat_disp)
                 with tabs_cat[idx_manual]:
                     cm1, cm2 = st.columns([6, 2], vertical_alignment="center")
                     dm = cm1.text_input("Operación Manual Nueva")
@@ -1054,7 +1054,8 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                                     time.sleep(0.5)
                                     st.rerun()
 
-                idx_rep = -1 if cat_disp else 1
+                # 3. Pestaña de Repuestos
+                idx_rep = len(cat_disp) + 1
                 with tabs_cat[idx_rep]:
                     cr1, cr2 = st.columns([3, 1])
                     d_rep = cr1.text_input("Repuesto")
@@ -1064,7 +1065,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                     c_env = cr4.number_input("Envío ($)", 0, step=1000)
                     m_pct = cr5.number_input("Margen %", 0, 100, 30)
                     p_final = int((c_rep + c_env) * (1 + m_pct / 100.0))
-                    st.markdown(f"**A Cobrar:** {format_clp(p_final)}")
+                    st.markdown(f"**A Cobrar Unitario Neto:** {format_clp(p_final)}")
                     if st.button("Añadir Repuesto"):
                         if d_rep and p_final > 0:
                             if 'lista_repuestos' not in st.session_state: st.session_state.lista_repuestos = []
@@ -1073,6 +1074,52 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                             st.toast("✅ Repuesto añadido al carrito", icon="🛒")
                             time.sleep(0.5)
                             st.rerun()
+                            
+                # 4. Pestaña EXCLUSIVA Clínica Móvil (Excel Integrado)
+                if es_cliente_privado:
+                    idx_clinica = len(cat_disp) + 2
+                    with tabs_cat[idx_clinica]:
+                        st.markdown("### 🚑 Módulo de Proyectos (Ingreso Múltiple)")
+                        st.info("Escribe directamente en la tabla como si fuera Excel. Haz clic en la última fila para agregar un nuevo repuesto o mano de obra.")
+                        
+                        if 'df_proyectos' not in st.session_state:
+                            st.session_state.df_proyectos = pd.DataFrame([{"Descripción": "", "Cantidad": 1, "Valor Neto": 0}])
+                        
+                        edited_df = st.data_editor(
+                            st.session_state.df_proyectos,
+                            num_rows="dynamic",
+                            use_container_width=True,
+                            column_config={
+                                "Descripción": st.column_config.TextColumn("Descripción del Trabajo / Material", required=True),
+                                "Cantidad": st.column_config.NumberColumn("Cant.", min_value=1, step=1, required=True),
+                                "Valor Neto": st.column_config.NumberColumn("Valor Unitario Neto ($)", min_value=0, step=1000, required=True, format="$%d")
+                            }
+                        )
+                        
+                        tot_proy = sum(row['Cantidad'] * row['Valor Neto'] for _, row in edited_df.iterrows() if row['Descripción'] and row['Valor Neto'] > 0)
+                        st.markdown(f"**Total Neto del bloque a ingresar: {format_clp(tot_proy)}**")
+                        
+                        if st.button("Añadir Bloque Completo al Carrito ➡️", type="primary"):
+                            items_added = 0
+                            if 'lista_particular' not in st.session_state: st.session_state.lista_particular = []
+                            for _, row in edited_df.iterrows():
+                                if row['Descripción'] and row['Valor Neto'] > 0:
+                                    st.session_state.lista_particular.append({
+                                        "Tipo": "manual",
+                                        "Descripción": str(row['Descripción']).upper(),
+                                        "Cantidad": int(row['Cantidad']),
+                                        "Unitario_Costo": float(row['Valor Neto']),
+                                        "Total_Costo": float(row['Cantidad'] * row['Valor Neto'])
+                                    })
+                                    items_added += 1
+                            if items_added > 0:
+                                st.toast(f"✅ {items_added} ítems añadidos al carrito", icon="🚑")
+                                st.session_state.df_proyectos = pd.DataFrame([{"Descripción": "", "Cantidad": 1, "Valor Neto": 0}])
+                                guardar_borrador()
+                                time.sleep(0.5)
+                                st.rerun()
+                            else:
+                                st.warning("No hay ítems válidos para agregar. (Falta descripción o valor mayor a 0).")
                             
                 st.markdown("---")
                 if st.button("Ir al Resumen Final y Generar PDF ➡️", type="primary", use_container_width=True):
