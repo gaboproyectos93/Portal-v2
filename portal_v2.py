@@ -429,16 +429,29 @@ def extraer_historial_completo():
 
 def refrescar_carrito_global():
     sel_final = []
-    col_tarifa = MAPEO_TARIFAS.get(st.session_state.get('c_tarifa', ''), "costo_ssas")
-    if not DF_PRECIOS.empty and 'categoria' in DF_PRECIOS.columns:
-        for idx, row in DF_PRECIOS.iterrows():
-            k = f"q_{row['trabajo']}_{idx}"
-            if k in st.session_state and isinstance(st.session_state[k], int) and st.session_state[k] > 0:
-                try: p = float(row[col_tarifa])
-                except: p = 0
-                sel_final.append({"Tipo": "matriz", "Descripción": row['trabajo'], "Cantidad": st.session_state[k], "Unitario_Costo": p, "Total_Costo": p * st.session_state[k], "Llave": k})
+    
+    # 1. Recuperar Matriz
+    if st.session_state.get('sub_paso') == 2:
+        # Si estamos en el paso 2, leemos desde los widgets activos
+        col_tarifa = MAPEO_TARIFAS.get(st.session_state.get('c_tarifa', ''), "costo_ssas")
+        if not DF_PRECIOS.empty and 'categoria' in DF_PRECIOS.columns:
+            for idx, row in DF_PRECIOS.iterrows():
+                k = f"q_{row['trabajo']}_{idx}"
+                if k in st.session_state and isinstance(st.session_state[k], int) and st.session_state[k] > 0:
+                    try: p = float(row[col_tarifa])
+                    except: p = 0
+                    sel_final.append({"Tipo": "matriz", "Descripción": row['trabajo'], "Cantidad": st.session_state[k], "Unitario_Costo": p, "Total_Costo": p * st.session_state[k], "Llave": k})
+    else:
+        # Si NO estamos en el paso 2 (ej. en el PDF), leemos de la memoria oculta para que no se borren
+        cache_antigua = st.session_state.get('sel_final_cache', [])
+        for item in cache_antigua:
+            if item['Tipo'] == 'matriz':
+                sel_final.append(item)
+                
+    # 2. Recuperar Manuales y Repuestos
     if 'lista_particular' in st.session_state: sel_final.extend(st.session_state.lista_particular)
     if 'lista_repuestos' in st.session_state: sel_final.extend(st.session_state.lista_repuestos)
+    
     st.session_state.sel_final_cache = sel_final
 
 def guardar_borrador(*args, **kwargs):
@@ -475,6 +488,11 @@ def guardar_borrador(*args, **kwargs):
     except Exception as e: print(f"Error borrador: {e}")
     refrescar_carrito_global()
 
+# Nueva función para el trigger visual al cambiar cantidades en la matriz
+def cb_actualizar_matriz():
+    st.toast("✅ Carrito actualizado", icon="🔄")
+    guardar_borrador()
+
 def cargar_borrador():
     if not supabase: return None
     try:
@@ -504,6 +522,9 @@ def limpiar_sesiones():
 
 def cb_eliminar_matriz(llave):
     st.session_state[llave] = 0
+    # Eliminación profunda desde el caché para que funcione en cualquier paso
+    if 'sel_final_cache' in st.session_state:
+        st.session_state.sel_final_cache = [x for x in st.session_state.sel_final_cache if x.get('Llave') != llave]
     guardar_borrador()
 
 # ==========================================
@@ -601,30 +622,31 @@ with st.sidebar:
             st.rerun()
         st.markdown("---")
         
+        # MÓDULO DE CARRITO GLOBAL EN LA BARRA LATERAL PARA CRISTIAN
         if st.session_state.get('vista_taller') == "Cotizador" and st.session_state.get('sub_paso', 0) > 0:
             st.markdown("### 🛒 Resumen en Vivo")
             refrescar_carrito_global()
             sel_g = st.session_state.get('sel_final_cache', [])
             if sel_g:
                 tn_g = sum(x['Total_Costo'] for x in sel_g)
-                iv_g = tn_g * 0.19
-                tf_g = tn_g + iv_g
+                # Modificado visualmente para que el basurero quede centrado
                 for idx, item in enumerate(sel_g):
-                    c_desc, c_tot, c_del = st.columns([5, 3, 1.5], vertical_alignment="center")
+                    c_desc, c_tot, c_del = st.columns([5, 3, 2], vertical_alignment="center")
                     c_desc.markdown(f"<small>{item['Cantidad']}x {item['Descripción']}</small>", unsafe_allow_html=True)
                     c_tot.markdown(f"<small><b>{format_clp(item['Total_Costo'])}</b></small>", unsafe_allow_html=True)
                     if item['Tipo'] == "matriz":
-                        c_del.button("🗑️", key=f"d_m_{item['Llave']}", on_click=cb_eliminar_matriz, args=(item['Llave'],))
+                        c_del.button("🗑️", key=f"d_m_{item['Llave']}", on_click=cb_eliminar_matriz, args=(item['Llave'],), use_container_width=True)
                     elif item['Tipo'] == "manual":
-                        if c_del.button("🗑️", key=f"d_ma_{idx}"):
+                        if c_del.button("🗑️", key=f"d_ma_{idx}", use_container_width=True):
                             st.session_state.lista_particular.remove(item)
                             guardar_borrador(); st.rerun()
                     elif item['Tipo'] == "repuesto":
-                        if c_del.button("🗑️", key=f"d_re_{idx}"):
+                        if c_del.button("🗑️", key=f"d_re_{idx}", use_container_width=True):
                             st.session_state.lista_repuestos.remove(item)
                             guardar_borrador(); st.rerun()
                 st.markdown("---")
-                st.markdown(f"**TOTAL: {format_clp(tf_g)}**")
+                # Exclusivo: Muestra solo el Total Neto en el Carrito Lateral
+                st.markdown(f"**TOTAL NETO: {format_clp(tn_g)}**")
             else:
                 st.info("Carrito vacío")
             st.markdown("---")
@@ -764,7 +786,7 @@ elif (st.session_state.get('rol') == "Planificador" or st.session_state.usuario 
             nom_contacto = "Gabriel Poblete"
             dir_c = cargar_directorio_correos()
             correo_contacto = dir_c.get(nom_contacto, "gabriel.poblete@kaufmann.cl")
-            tel_contacto = "56999097417"
+            tel_contacto = "+56999097417"
             
             c1, c2, c3 = st.columns(3)
             st.text_input("Nombre de Contacto", value=nom_contacto, disabled=True)
@@ -798,7 +820,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
     if st.session_state.vista_taller == "Bandeja":
         st.title("📥 Bandeja de Entrada")
         
-        # EL BORRADOR SOLO SE VERIFICA Y APARECE AQUÍ EN LA BANDEJA
         if 'borrador_check' not in st.session_state:
             st.session_state.borrador_check = True
             
@@ -952,6 +973,14 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                     st.rerun()
 
             elif st.session_state.sub_paso == 2:
+                
+                # ¡CURA PARA LA AMNESIA DE STREAMLIT! 
+                # Antes de mostrar los botones, inyectamos en memoria lo que estaba en el carrito
+                if 'sel_final_cache' in st.session_state:
+                    for item in st.session_state.sel_final_cache:
+                        if item['Tipo'] == 'matriz' and item['Llave'] not in st.session_state:
+                            st.session_state[item['Llave']] = item['Cantidad']
+
                 if st.button("⬅️ Volver a Datos Administrativos"):
                     st.session_state.sub_paso = 1
                     guardar_borrador()
@@ -968,8 +997,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                 st.session_state['c_tarifa'] = st.session_state.get('w_tarifa', tarifa_default)
                 
                 col_tarifa_a_buscar = MAPEO_TARIFAS.get(st.session_state.get('c_tarifa'), "costo_ssas")
-                
-                sel_final = []
                 
                 if st.session_state.get('c_tarifa') == "Cliente Particular":
                     cat_disp = []
@@ -994,11 +1021,9 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                                 cc1, cc2, cc3 = st.columns([5.5, 1.5, 2], vertical_alignment="center")
                                 cc1.markdown(f"**{row['trabajo']}**")
                                 k = f"q_{row['trabajo']}_{idx}"
-                                qty = cc2.number_input("", 0, 20, value=st.session_state.get(k, 0), key=k, label_visibility="collapsed", on_change=guardar_borrador)
+                                qty = cc2.number_input("", 0, 20, value=st.session_state.get(k, 0), key=k, label_visibility="collapsed", on_change=cb_actualizar_matriz)
                                 p = float(row[col_tarifa_a_buscar])
                                 cc3.markdown(f"**{format_clp(p)}**")
-                                if qty > 0: 
-                                    sel_final.append({"Tipo": "matriz", "Descripción": row['trabajo'], "Cantidad": qty, "Unitario_Costo": p, "Total_Costo": p * qty, "Llave": k})
                 
                 idx_manual = -2 if cat_disp else 0
                 with tabs_cat[idx_manual]:
@@ -1011,6 +1036,8 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                             st.session_state.lista_particular.append({"Tipo": "manual", "Descripción": dm, "Cantidad": 1, "Unitario_Costo": pm, "Total_Costo": pm})
                             guardar_trabajo_manual_db(dm, pm) 
                             guardar_borrador()
+                            st.toast("✅ Trabajo manual añadido al carrito", icon="🔧")
+                            time.sleep(0.5)
                             st.rerun()
                             
                     h_manuales = cargar_trabajos_manuales_historicos()
@@ -1022,7 +1049,10 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                                 if cb.button("➕", key=f"add_hm_{hm['id']}"):
                                     if 'lista_particular' not in st.session_state: st.session_state.lista_particular = []
                                     st.session_state.lista_particular.append({"Tipo": "manual", "Descripción": hm['descripcion'], "Cantidad": 1, "Unitario_Costo": hm['costo'], "Total_Costo": hm['costo']})
-                                    guardar_borrador(); st.rerun()
+                                    guardar_borrador()
+                                    st.toast("✅ Trabajo manual añadido al carrito", icon="🔧")
+                                    time.sleep(0.5)
+                                    st.rerun()
 
                 idx_rep = -1 if cat_disp else 1
                 with tabs_cat[idx_rep]:
@@ -1040,6 +1070,8 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                             if 'lista_repuestos' not in st.session_state: st.session_state.lista_repuestos = []
                             st.session_state.lista_repuestos.append({"Tipo": "repuesto", "Descripción": d_rep, "Cantidad": q_rep, "Unitario_Costo": float(p_final), "Total_Costo": float(p_final * q_rep)})
                             guardar_borrador()
+                            st.toast("✅ Repuesto añadido al carrito", icon="🛒")
+                            time.sleep(0.5)
                             st.rerun()
                             
                 st.markdown("---")
@@ -1070,7 +1102,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                     if st.button("💾 GUARDAR Y GENERAR PDF", type="primary", use_container_width=True):
                         with st.spinner("Generando Archivo en la Nube con Evidencia..."):
                             try:
-                                # EXTRACCIÓN DESDE LA MEMORIA PROFUNDA 'c_' (CORRECCIÓN V21)
                                 c_rut_fac_val = st.session_state.get('c_rut_fac', '')
                                 c_cli_fac_val = st.session_state.get('c_cli_fac', '')
                                 c_marca_val = st.session_state.get('c_marca', '--- Seleccione Marca ---')
