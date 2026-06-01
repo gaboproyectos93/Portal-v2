@@ -393,15 +393,16 @@ def registrar_solicitud_gabo(patente, contacto, telefono, correo, origen, destin
     try:
         pat_oficial = formatear_patente(patente)
         if pat_oficial != "S/P":
+            # Eliminamos el registro de contacto, teléfono y correo en el directorio maestro (V24)
             upsert_data = {
-                "patente": pat_oficial, "nombre_contacto": contacto, 
-                "telefono": telefono, "correo": correo, 
+                "patente": pat_oficial, 
                 "origen_cliente": origen, "cliente_final": destino_txt, "tipo_cliente": tarifa_math
             }
             if marca and marca != "--- Seleccione Marca ---": upsert_data["marca"] = marca
             if modelo and modelo != "---": upsert_data["modelo"] = modelo
             supabase.table("directorio_vehiculos").upsert(upsert_data).execute()
         
+        # Mantenemos contacto_gestion en historial_trabajos solo para trazabilidad (saber que fue Gabo)
         supabase.table("historial_trabajos").insert({
             "patente": pat_oficial if pat_oficial != "S/P" else None,
             "origen_trabajo": origen, "usuario_final": destino_txt, "tarifa_aplicada": tarifa_math,
@@ -814,6 +815,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
     if st.session_state.vista_taller == "Bandeja":
         st.title("📥 Bandeja de Entrada")
         
+        # EL BORRADOR SOLO SE VERIFICA Y APARECE AQUÍ EN LA BANDEJA
         if 'borrador_check' not in st.session_state:
             st.session_state.borrador_check = True
             
@@ -934,7 +936,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                     def_cli = "KAUFMANN S.A."
                     def_rut = "92.475.000-6"
                 else:
-                    def_cli = st.session_state.get('c_cli_fac') or (datos_v.get('nombre_contacto', '') if datos_v else "")
+                    def_cli = st.session_state.get('c_cli_fac') or ""
                     def_rut = st.session_state.get('c_rut_fac') or (datos_v.get('rut_facturacion', '') if datos_v else "")
 
                 def_us_final = st.session_state.get('c_us_final') or (datos_v.get('cliente_final', '') if datos_v else '')
@@ -1149,6 +1151,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                     if st.button("💾 GUARDAR Y GENERAR PDF", type="primary", use_container_width=True):
                         with st.spinner("Generando Archivo en la Nube con Evidencia..."):
                             try:
+                                # EXTRACCIÓN DESDE LA MEMORIA PROFUNDA 'c_'
                                 c_rut_fac_val = st.session_state.get('c_rut_fac', '')
                                 c_cli_fac_val = st.session_state.get('c_cli_fac', '')
                                 c_marca_val = st.session_state.get('c_marca', '--- Seleccione Marca ---')
@@ -1160,7 +1163,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
 
                                 pat_oficial = formatear_patente(p_in)
                                 if pat_oficial != "S/P":
-                                    supabase.table("directorio_vehiculos").upsert({"patente": pat_oficial, "rut_facturacion": c_rut_fac_val, "marca": c_marca_val, "modelo": c_modelo_val}).execute()
+                                    supabase.table("directorio_vehiculos").upsert({"patente": pat_oficial, "origen_cliente": c_origen_val, "cliente_final": c_us_final_val, "tipo_cliente": c_tarifa_val, "marca": c_marca_val, "modelo": c_modelo_val}).execute()
 
                                 sol_id = st.session_state.get('sol_activa')
                                 fecha_actual = get_fecha_hora_chile()
