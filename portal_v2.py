@@ -114,7 +114,7 @@ MAPEO_TARIFAS = {
 }
 
 # ==========================================
-# 3. GENERADOR DE PDF Y UTILS
+# 3. GENERADOR DE PDF Y UTILS DE CORREO
 # ==========================================
 def format_clp(v): 
     if pd.isna(v) or v is None: return "$0"
@@ -297,7 +297,7 @@ def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, ite
     
     fecha_txt = fecha_presupuesto.strftime('%d/%m/%Y')
     
-    # FORMATEO DE RUT Y ELIMINACIÓN DE LA VALIDEZ DE LA TABLA
+    # FORMATEO DE RUT
     fila_dinamica(" Señor(es)", str(cliente_nombre).upper(), " Fecha Emisión", fecha_txt)
     if n_sap_txt:
         fila_dinamica(" RUT", formatear_rut(cliente_rut), " N° OT / SAP", str(n_sap_txt).upper())
@@ -364,13 +364,6 @@ def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, ite
         pdf.cell(0, 6, "OBSERVACIONES:", 0, 1)
         pdf.set_font('Arial', '', 9)
         pdf.multi_cell(0, 5, str(observaciones), 0, 'L')
-    
-    # MENSAJE DE VALIDEZ Y GARANTÍA MOVIDO AL FINAL
-    pdf.ln(8)
-    pdf.set_font('Arial', 'I', 9)
-    pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 5, "Validez presupuesto: 30 días. Garantía: 3 meses.", 0, 1, 'C')
-    pdf.set_text_color(0, 0, 0)
         
     if fotos_subidas:
         pdf.add_page()
@@ -401,9 +394,17 @@ def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, ite
                 os.remove(tmp_path)
             except Exception as e: print(f"Error insertando imagen: {e}")
 
+    # TEXTO DE VALIDEZ Y FECHA AL FINAL DEL DOCUMENTO
     pdf.ln(15)
+    pdf.set_font('Arial', 'I', 9)
+    pdf.set_text_color(100, 100, 100)
+    pdf.cell(0, 5, "Validez presupuesto: 30 días. Garantía: 3 meses.", 0, 1, 'C')
+    
+    pdf.ln(2)
     pdf.set_text_color(0, 0, 0)
-    pdf.cell(0, 6, f"Padre las Casas, {datetime.now().strftime('%d-%m-%Y')}", 0, 1, 'C')
+    # FECHA DE EMISIÓN SELECCIONADA POR CRISTIAN, NO LA DE IMPRESIÓN
+    pdf.cell(0, 6, f"Padre las Casas, {fecha_presupuesto.strftime('%d-%m-%Y')}", 0, 1, 'C')
+    
     salida = pdf.output(dest='S')
     return salida.encode('latin-1') if isinstance(salida, str) else bytes(salida)
 
@@ -662,6 +663,7 @@ with st.sidebar:
             st.rerun()
         st.markdown("---")
         
+        # MÓDULO DE CARRITO GLOBAL EN LA BARRA LATERAL PARA CRISTIAN
         if st.session_state.get('vista_taller') == "Cotizador" and st.session_state.get('sub_paso', 0) > 0:
             st.markdown("### 🛒 Resumen en Vivo")
             refrescar_carrito_global()
@@ -930,12 +932,15 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                             st.toast("Movido a descartados."); time.sleep(1); st.rerun()
                         
                         if fila['estado'] == 'Generado':
-                            st.markdown("<small><i>Acciones Rápidas (Para mover la orden sin abrirla):</i></small>", unsafe_allow_html=True)
-                            ca, cb = st.columns(2)
-                            if ca.button("📱 Marcar Enviado (WhatsApp)", key=f"wsp_fast_{fila['id_cotizacion']}", use_container_width=True):
+                            st.markdown("<small><i>Mover orden manualmente:</i></small>", unsafe_allow_html=True)
+                            ca, cb, cc = st.columns(3)
+                            if ca.button("⏳ A Esperando Aprob.", key=f"m_env_{fila['id_cotizacion']}", use_container_width=True):
                                 supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", fila['id_cotizacion']).execute()
                                 st.rerun()
-                            if cb.button("✅ Marcar Realizado", key=f"real_fast_{fila['id_cotizacion']}", use_container_width=True):
+                            if cb.button("🛠️ A En Proceso", key=f"m_proc_{fila['id_cotizacion']}", use_container_width=True):
+                                supabase.table("historial_trabajos").update({"estado": "En Proceso"}).eq("id_cotizacion", fila['id_cotizacion']).execute()
+                                st.rerun()
+                            if cc.button("✅ A Realizado", key=f"m_term_{fila['id_cotizacion']}", use_container_width=True):
                                 supabase.table("historial_trabajos").update({"estado": "Terminado"}).eq("id_cotizacion", fila['id_cotizacion']).execute()
                                 st.rerun()
                                 
@@ -1100,8 +1105,14 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                     def_cli = "KAUFMANN S.A."
                     def_rut = "92.475.000-6"
                 else:
-                    def_cli = st.session_state.get('c_cli_fac') or (datos_v.get('nombre_cliente_manual', '') if datos_v else "")
-                    def_rut = st.session_state.get('c_rut_fac') or (datos_v.get('rut_facturacion', '') if datos_v else "")
+                    # LIMPIEZA DE CACHÉ DE RUT SI CAMBIÓ DE KAUFMANN A PARTICULAR
+                    rut_cache = st.session_state.get('c_rut_fac', '')
+                    cli_cache = st.session_state.get('c_cli_fac', '')
+                    if rut_cache == "92.475.000-6": rut_cache = ""
+                    if cli_cache == "KAUFMANN S.A.": cli_cache = ""
+                    
+                    def_cli = cli_cache or (datos_v.get('nombre_cliente_manual', '') if datos_v else "")
+                    def_rut = rut_cache or (datos_v.get('rut_facturacion', '') if datos_v else "")
 
                 def_us_final = st.session_state.get('c_us_final') or (datos_v.get('cliente_final', '') if datos_v else '')
 
@@ -1295,7 +1306,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                     st.markdown("### Configuración del Documento")
                     c_f1, c_f2 = st.columns(2)
                     
-                    # SELECTOR DE FECHA CONDICIONADO
                     if st.session_state.get('c_tarifa') == 'Cliente Particular':
                         fecha_pdf_sel = c_f1.date_input("Fecha de Emisión del Presupuesto:", value=datetime.today())
                     else:
@@ -1321,7 +1331,16 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
 
                                 pat_oficial = formatear_patente(p_in)
                                 if pat_oficial != "S/P":
-                                    supabase.table("directorio_vehiculos").upsert({"patente": pat_oficial, "origen_cliente": c_origen_val, "cliente_final": c_us_final_val, "tipo_cliente": c_tarifa_val, "marca": c_marca_val, "modelo": c_modelo_val}).execute()
+                                    # CORRECCIÓN VITAL: AHORA SÍ GUARDA EL RUT EN LA BASE DE DATOS
+                                    supabase.table("directorio_vehiculos").upsert({
+                                        "patente": pat_oficial, 
+                                        "origen_cliente": c_origen_val, 
+                                        "cliente_final": c_us_final_val, 
+                                        "tipo_cliente": c_tarifa_val, 
+                                        "marca": c_marca_val, 
+                                        "modelo": c_modelo_val,
+                                        "rut_facturacion": c_rut_fac_val
+                                    }).execute()
 
                                 sol_id = st.session_state.get('sol_activa')
                                 fecha_actual = get_fecha_hora_chile()
