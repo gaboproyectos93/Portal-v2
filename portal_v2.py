@@ -136,7 +136,6 @@ def notificar_cristian_nueva_ot(patente, marca, modelo, dest, desc):
         remitente = st.secrets["email"]["user"]
         password = st.secrets["email"]["password"]
         destinatario = "c.h.servicioautomotriz@gmail.com"
-        
         msg = MIMEMultipart()
         msg['From'] = f"Planificación Kaufmann GPR <{remitente}>"
         msg['To'] = destinatario
@@ -149,16 +148,35 @@ def notificar_cristian_nueva_ot(patente, marca, modelo, dest, desc):
         cuerpo += "Por favor, ingresa a la aplicación para generar la cotización.\n\nSaludos,\nGabriel Poblete"
         
         msg.attach(MIMEText(cuerpo, 'plain'))
-        
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(remitente, password)
         server.send_message(msg)
         server.quit()
         return True
-    except Exception as e:
-        print(f"Error enviando notificación: {e}")
-        return False
+    except Exception as e: return False
+
+def notificar_cristian_aprobacion(patente, id_cot):
+    try:
+        remitente = st.secrets["email"]["user"]
+        password = st.secrets["email"]["password"]
+        destinatario = "c.h.servicioautomotriz@gmail.com"
+        msg = MIMEMultipart()
+        msg['From'] = f"Planificación Kaufmann GPR <{remitente}>"
+        msg['To'] = destinatario
+        msg['Subject'] = f"✅ TRABAJO APROBADO - Patente: {formatear_patente(patente)}"
+        
+        cuerpo = f"Hola Cristian,\n\nTe informo que el presupuesto N° {id_cot} para el vehículo {formatear_patente(patente)} ha sido APROBADO.\n\n"
+        cuerpo += "Por favor, ingresa a tu Bandeja de Entrada en la plataforma (Pestaña 'En Taller') y presiona 'Comenzar a Trabajar' para definir la fecha de entrega de este vehículo.\n\nSaludos,\nGabriel Poblete"
+        
+        msg.attach(MIMEText(cuerpo, 'plain'))
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(remitente, password)
+        server.send_message(msg)
+        server.quit()
+        return True
+    except Exception as e: return False
 
 def enviar_correo(destinatario, asunto, mensaje_texto, pdf_bytes, nombre_archivo, email_reply):
     try:
@@ -224,7 +242,7 @@ class PDF(FPDF):
         self.cell(0, 4, "Documento generado por sistema cotizaciones GPR", 0, 0, 'R')
         self.set_text_color(0, 0, 0)
 
-def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, items, total_neto, is_official, estado_trabajo, usuario_final_txt, observaciones, correlativo, n_sap_txt="", fotos_subidas=None):
+def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, items, total_neto, is_official, estado_trabajo, usuario_final_txt, observaciones, correlativo, fecha_presupuesto, n_sap_txt="", fotos_subidas=None):
     pat_str = formatear_patente(patente)
         
     pdf = PDF(correlativo=correlativo, patente=pat_str, official=is_official)
@@ -263,12 +281,15 @@ def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, ite
     pdf.cell(190, 6, "  DATOS DEL CLIENTE / FACTURACIÓN", 1, 1, 'L', 1)
     pdf.set_text_color(0, 0, 0)
     
-    fila_dinamica(" Señor(es)", str(cliente_nombre).upper(), " Fecha Emisión", datetime.now().strftime('%d/%m/%Y'))
+    fecha_txt = fecha_presupuesto.strftime('%d/%m/%Y')
+    
+    fila_dinamica(" Señor(es)", str(cliente_nombre).upper(), " Fecha Emisión", fecha_txt)
     if n_sap_txt:
         fila_dinamica(" RUT", str(cliente_rut).upper(), " N° OT / SAP", str(n_sap_txt).upper())
-        fila_dinamica(" ", "", " Usuario Final", str(usuario_final_txt).upper(), is_last=True)
+        fila_dinamica(" Validez", "30 DÍAS", " Usuario Final", str(usuario_final_txt).upper(), is_last=True)
     else:
-        fila_dinamica(" RUT", str(cliente_rut).upper(), " Usuario Final", str(usuario_final_txt).upper(), is_last=True)
+        fila_dinamica(" RUT", str(cliente_rut).upper(), " Validez", "30 DÍAS")
+        fila_dinamica(" ", "", " Usuario Final", str(usuario_final_txt).upper(), is_last=True)
     pdf.ln(4)
     
     pdf.set_font('Arial', 'B', 10)
@@ -376,7 +397,13 @@ def buscar_vehiculo_en_directorio(patente):
         
         query = f"patente.eq.{pat_formateada},patente.eq.{pat_limpia}"
         res = supabase.table("directorio_vehiculos").select("*").or_(query).execute()
-        if res.data: return res.data[0]
+        if res.data: 
+            datos = res.data[0]
+            # Rescatamos el último nombre manual que Cristian ingresó para esta patente privada
+            res_hist = supabase.table("historial_trabajos").select("nombre_cliente_manual").eq("patente", pat_formateada).order("id_cotizacion", desc=True).limit(1).execute()
+            if res_hist.data and res_hist.data[0].get('nombre_cliente_manual'):
+                datos['nombre_cliente_manual'] = res_hist.data[0]['nombre_cliente_manual']
+            return datos
     except Exception as e: pass
     return None
 
@@ -602,7 +629,7 @@ with st.sidebar:
             limpiar_sesiones()
             st.session_state.vista_taller = "Bandeja"
             st.rerun()
-        if st.button("📥 Bandeja de Órdenes"): 
+        if st.button("📥 Bandeja de Entrada (Kanban)"): 
             st.session_state.vista_taller = "Bandeja"
             st.rerun()
         if st.button("🚀 Nueva Cotización Libre"): 
@@ -689,13 +716,18 @@ elif (st.session_state.get('rol') == "Planificador" or st.session_state.usuario 
             df_enviadas = df_gabo[df_gabo['estado'] == 'Enviado']
             if not df_enviadas.empty:
                 for idx, r in df_enviadas.iterrows():
-                    ca, cb, cc = st.columns([5, 1.5, 1.5])
+                    ca, cb, cc, cd = st.columns([4, 1, 2, 2])
                     ca.write(f"📄 N° {r['id_cotizacion']} | Patente: {formatear_patente(r['patente'])} | Total: {format_clp(r['total_clp'])}")
                     if pd.notna(r.get('pdf_url')): 
-                        cb.link_button("👁️ Ver PDF", r['pdf_url'])
-                    if cc.button("✅ Aprobar Trabajo", key=f"apr_gb_{r['id_cotizacion']}", type="primary"):
+                        cb.link_button("👁️ PDF", r['pdf_url'])
+                    
+                    enviar_noti_aprob = cc.checkbox("📧 Notificar a Cristian", value=True, key=f"chk_apr_{r['id_cotizacion']}")
+                    
+                    if cd.button("✅ Aprobar Trabajo", key=f"apr_gb_{r['id_cotizacion']}", type="primary", use_container_width=True):
                         fecha_aprob = get_fecha_hora_chile()
                         supabase.table("historial_trabajos").update({"estado": "Aprobado", "fecha_aprobacion": fecha_aprob}).eq("id_cotizacion", r['id_cotizacion']).execute()
+                        if enviar_noti_aprob:
+                            notificar_cristian_aprobacion(r['patente'], r['id_cotizacion'])
                         st.success("Trabajo Aprobado."); time.sleep(1); st.rerun()
             else: st.info("No hay cotizaciones pendientes de tu aprobación.")
             
@@ -803,12 +835,12 @@ elif (st.session_state.get('rol') == "Planificador" or st.session_state.usuario 
                 else: st.warning("Falta el diagnóstico/instrucción.")
 
 # ==========================================
-# 8. VISTA OPERATIVA INTEGRADA (CRISTIAN) - FLUJO WIZARD
+# 8. VISTA OPERATIVA INTEGRADA (CRISTIAN) - KANBAN & COTIZADOR
 # ==========================================
 elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cristian") and st.session_state.get('vista_taller') != "IA":
     
     if st.session_state.vista_taller == "Bandeja":
-        st.title("📥 Bandeja de Entrada")
+        st.title("📥 Tablero de Taller (Kanban)")
         
         if 'borrador_check' not in st.session_state:
             st.session_state.borrador_check = True
@@ -834,58 +866,149 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
             st.markdown("---")
 
         df_todo = extraer_historial_completo()
-        
         df_dir = pd.DataFrame()
         if supabase:
             res_dir = supabase.table("directorio_vehiculos").select("patente, marca, modelo").execute()
             if res_dir.data: df_dir = pd.DataFrame(res_dir.data)
             
         if not df_todo.empty and 'estado' in df_todo.columns:
-            df_req = df_todo[df_todo['estado'] == 'Requerido']
-            if not df_req.empty:
-                for idx, fila in df_req.iterrows():
-                    pat = fila['patente'] if pd.notna(fila['patente']) else 'S/P'
-                    m_txt = ""
-                    marca_hist = fila.get('marca')
-                    mod_hist = fila.get('modelo')
-                    
-                    if pd.notna(marca_hist) and pd.notna(mod_hist):
-                        m_txt = f" | {marca_hist} {mod_hist}"
-                    elif pat != 'S/P' and not df_dir.empty:
-                        match = df_dir[df_dir['patente'] == pat]
-                        if not match.empty:
-                            marca = match.iloc[0].get('marca', '')
-                            mod = match.iloc[0].get('modelo', '')
-                            m_txt = f" | {marca} {mod}"
-                    
-                    st.markdown(f"""
-                    <div class="card-requerido">
-                        <h4>📋 Orden N° {fila['id_cotizacion']} | Patente: {formatear_patente(pat)}{m_txt}</h4>
-                        <p><strong>Destino:</strong> {fila.get('usuario_final', '')} | <strong>Fecha:</strong> {fila.get('fecha_creacion', '')}</p>
-                        <p><strong>Instrucciones:</strong> {fila['descripcion_requerimiento']}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    b1, b2 = st.columns([1, 4])
-                    if b1.button("🗑️ Descartar", key=f"desc_{fila['id_cotizacion']}"):
-                        supabase.table("historial_trabajos").update({"estado": "Descartado"}).eq("id_cotizacion", fila['id_cotizacion']).execute()
-                        st.toast("Solicitud descartada."); time.sleep(1); st.rerun()
+            
+            # KANBAN TABS
+            t1, t2, t3, t4 = st.tabs(["🆕 Por Cotizar / Generados", "⏳ Esperando Aprobación", "🛠️ En Taller (En Proceso)", "✅ Realizados"])
+            
+            # --- TAB 1: POR COTIZAR (Requerido / Generado) ---
+            with t1:
+                df_req = df_todo[df_todo['estado'].isin(['Requerido', 'Generado'])]
+                if not df_req.empty:
+                    for idx, fila in df_req.iterrows():
+                        pat = fila['patente'] if pd.notna(fila['patente']) else 'S/P'
+                        m_txt = f" | {fila.get('marca', '')} {fila.get('modelo', '')}" if pd.notna(fila.get('marca')) else ""
                         
-                    if b2.button(f"⚙️ Atender e Iniciar Cotización", key=f"at_{fila['id_cotizacion']}", type="primary"):
-                        limpiar_sesiones()
-                        st.session_state.sol_activa = fila['id_cotizacion']
-                        st.session_state.c_patente = fila['patente'] if pd.notna(fila['patente']) else ""
-                        st.session_state.c_origen = fila['origen_trabajo']
-                        st.session_state.c_us_final = fila.get('usuario_final', '')
-                        st.session_state.c_tarifa = fila.get('tarifa_aplicada', 'SSAS (Servicio Salud)')
-                        st.session_state.c_nsap = fila.get('n_sap', '')
-                        st.session_state.c_marca = marca_hist if pd.notna(marca_hist) else None
-                        st.session_state.c_modelo = mod_hist if pd.notna(mod_hist) else None
-                        st.session_state.sub_paso = 1 
-                        st.session_state.vista_taller = "Cotizador"
-                        guardar_borrador()
-                        st.rerun()
-            else: st.success("¡Excelente! No tienes solicitudes pendientes.")
+                        bg_color = "#ffe6e6" if fila['estado'] == 'Requerido' else "#fff3e6"
+                        border_color = "#ff4d4d" if fila['estado'] == 'Requerido' else "#ff9933"
+                        titulo = "📋 Nuevo Requerimiento" if fila['estado'] == 'Requerido' else "📄 Borrador Generado (Sin Enviar)"
+                        
+                        st.markdown(f"""
+                        <div style="background-color: {bg_color}; padding: 15px; border-left: 5px solid {border_color}; border-radius: 4px; margin-bottom: 10px; color: #111827;">
+                            <h4 style="color: #111827; margin-top: 0;">{titulo} - Orden N° {fila['id_cotizacion']} | Patente: {formatear_patente(pat)}{m_txt}</h4>
+                            <p><strong>Destino:</strong> {fila.get('usuario_final', '')} | <strong>Total Actual:</strong> {format_clp(fila.get('total_clp', 0))}</p>
+                            <p style="margin-bottom: 0;"><strong>Instrucciones:</strong> {fila.get('descripcion_requerimiento', 'N/A')}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        col1, col2 = st.columns([1, 4])
+                        if col1.button("🗑️ Descartar", key=f"desc_{fila['id_cotizacion']}"):
+                            supabase.table("historial_trabajos").update({"estado": "Descartado"}).eq("id_cotizacion", fila['id_cotizacion']).execute()
+                            st.toast("Movido a descartados."); time.sleep(1); st.rerun()
+                            
+                        if col2.button(f"⚙️ Atender e Iniciar Cotización", key=f"at_{fila['id_cotizacion']}", type="primary"):
+                            limpiar_sesiones()
+                            st.session_state.sol_activa = fila['id_cotizacion']
+                            st.session_state.c_patente = fila['patente'] if pd.notna(fila['patente']) else ""
+                            st.session_state.c_origen = fila['origen_trabajo']
+                            st.session_state.c_us_final = fila.get('usuario_final', '')
+                            st.session_state.c_tarifa = fila.get('tarifa_aplicada', 'SSAS (Servicio Salud)')
+                            st.session_state.c_nsap = fila.get('n_sap', '')
+                            st.session_state.c_marca = fila.get('marca') if pd.notna(fila.get('marca')) else None
+                            st.session_state.c_modelo = fila.get('modelo') if pd.notna(fila.get('modelo')) else None
+                            st.session_state.sub_paso = 1 
+                            st.session_state.vista_taller = "Cotizador"
+                            guardar_borrador()
+                            st.rerun()
+                else:
+                    st.success("¡Al día! No hay requerimientos nuevos.")
+
+            # --- TAB 2: ESPERANDO APROBACIÓN (Enviados) ---
+            with t2:
+                df_env = df_todo[df_todo['estado'] == 'Enviado']
+                if not df_env.empty:
+                    for idx, r in df_env.iterrows():
+                        st.markdown(f"""
+                        <div style="background-color: #e6f2ff; padding: 15px; border-left: 5px solid #0066cc; border-radius: 4px; margin-bottom: 10px; color: #111827;">
+                            <h4 style="color: #111827; margin-top: 0;">📤 Enviado al Cliente - Orden N° {r['id_cotizacion']} | Patente: {formatear_patente(r['patente'])}</h4>
+                            <p style="margin-bottom: 0;"><strong>Destino:</strong> {r.get('usuario_final', '')} | <strong>Total Cotizado:</strong> {format_clp(r['total_clp'])}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        ca, cb, cc = st.columns([2, 2, 2])
+                        if pd.notna(r.get('pdf_url')):
+                            ca.link_button("👁️ Ver PDF Enviado", r['pdf_url'], use_container_width=True)
+                        if cb.button("✅ Marcar como Aprobado (Manual)", key=f"apr_m_{r['id_cotizacion']}", type="primary", use_container_width=True):
+                            fecha_aprob = get_fecha_hora_chile()
+                            supabase.table("historial_trabajos").update({"estado": "Aprobado", "fecha_aprobacion": fecha_aprob}).eq("id_cotizacion", r['id_cotizacion']).execute()
+                            st.toast("¡Pasando a taller!"); time.sleep(1); st.rerun()
+                        if cc.button("🗑️ Anular", key=f"anul_{r['id_cotizacion']}", use_container_width=True):
+                            supabase.table("historial_trabajos").update({"estado": "Anulado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
+                            st.rerun()
+                else:
+                    st.info("No hay cotizaciones pendientes de respuesta.")
+
+            # --- TAB 3: EN TALLER (Aprobados / En Proceso) ---
+            with t3:
+                df_taller = df_todo[df_todo['estado'].isin(['Aprobado', 'En Proceso'])]
+                if not df_taller.empty:
+                    for idx, r in df_taller.iterrows():
+                        # Lógica del semáforo visual
+                        semaforo_txt = ""
+                        color_borde = "#33cc33" # Verde por defecto
+                        if r['estado'] == 'En Proceso' and pd.notna(r.get('fecha_entrega')):
+                            try:
+                                f_ent = datetime.strptime(str(r['fecha_entrega']), "%Y-%m-%d").date()
+                                hoy = datetime.now().date()
+                                dias = (f_ent - hoy).days
+                                if dias < 0:
+                                    semaforo_txt = f" | 🔴 Atrasado ({abs(dias)} días)"
+                                    color_borde = "#ff0000"
+                                elif dias == 0:
+                                    semaforo_txt = f" | 🟡 ¡Se entrega HOY!"
+                                    color_borde = "#ffcc00"
+                                elif dias == 1:
+                                    semaforo_txt = f" | 🟡 Se entrega mañana"
+                                    color_borde = "#ffcc00"
+                                else:
+                                    semaforo_txt = f" | 🟢 En tiempo ({dias} días restantes)"
+                            except: pass
+                            
+                        titulo_taller = "🚀 APROBADO (Esperando Inicio)" if r['estado'] == 'Aprobado' else f"🛠️ EN PROCESO{semaforo_txt}"
+                        bg_taller = "#e6ffe6" if r['estado'] == 'Aprobado' else "#f9f2ec"
+
+                        st.markdown(f"""
+                        <div style="background-color: {bg_taller}; padding: 15px; border-left: 5px solid {color_borde}; border-radius: 4px; margin-bottom: 10px; color: #111827;">
+                            <h4 style="color: #111827; margin-top: 0;">{titulo_taller} - Orden N° {r['id_cotizacion']} | {formatear_patente(r['patente'])}</h4>
+                            <p style="margin-bottom: 0;"><strong>Destino:</strong> {r.get('usuario_final', '')} | <strong>Aprobado el:</strong> {r.get('fecha_aprobacion', 'N/A')}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        if r['estado'] == 'Aprobado':
+                            with st.expander("⏱️ Comenzar a Trabajar"):
+                                st.write("Define la fecha compromiso de entrega para este vehículo:")
+                                c_d, c_b = st.columns([3, 2])
+                                # Nota: Streamlit adapta el calendario al idioma/locale del navegador (puede empezar en domingo o lunes automáticamente).
+                                d_entrega = c_d.date_input("Fecha estimada de entrega", key=f"date_{r['id_cotizacion']}")
+                                if c_b.button("Confirmar Inicio", key=f"btn_ini_{r['id_cotizacion']}", type="primary"):
+                                    supabase.table("historial_trabajos").update({"estado": "En Proceso", "fecha_entrega": str(d_entrega)}).eq("id_cotizacion", r['id_cotizacion']).execute()
+                                    st.success("¡Vehículo en proceso!"); time.sleep(1); st.rerun()
+                        
+                        elif r['estado'] == 'En Proceso':
+                            c_pdf, c_term = st.columns([1, 4])
+                            if pd.notna(r.get('pdf_url')):
+                                c_pdf.link_button("👁️ Ver OT (PDF)", r['pdf_url'], use_container_width=True)
+                            if c_term.button("✅ Trabajo Realizado / Terminado", key=f"btn_term_{r['id_cotizacion']}", type="primary", use_container_width=True):
+                                supabase.table("historial_trabajos").update({"estado": "Terminado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
+                                st.balloons(); time.sleep(1); st.rerun()
+                else:
+                    st.info("No hay vehículos actualmente en el taller.")
+
+            # --- TAB 4: REALIZADOS ---
+            with t4:
+                df_term = df_todo[df_todo['estado'] == 'Terminado']
+                if not df_term.empty:
+                    st.dataframe(
+                        df_term[['id_cotizacion', 'fecha_aprobacion', 'patente', 'usuario_final', 'total_clp']], 
+                        use_container_width=True, hide_index=True
+                    )
+                else:
+                    st.info("Aún no hay trabajos terminados.")
 
     elif st.session_state.vista_taller == "Cotizador":
         if 'sub_paso' not in st.session_state: st.session_state.sub_paso = 0
@@ -930,7 +1053,8 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                     def_cli = "KAUFMANN S.A."
                     def_rut = "92.475.000-6"
                 else:
-                    def_cli = st.session_state.get('c_cli_fac') or ""
+                    # CORRECCIÓN DE LA AMNESIA DE CLIENTES PRIVADOS (RUT Y NOMBRE DE VUELTA)
+                    def_cli = st.session_state.get('c_cli_fac') or (datos_v.get('nombre_cliente_manual', '') if datos_v else "")
                     def_rut = st.session_state.get('c_rut_fac') or (datos_v.get('rut_facturacion', '') if datos_v else "")
 
                 def_us_final = st.session_state.get('c_us_final') or (datos_v.get('cliente_final', '') if datos_v else '')
@@ -985,8 +1109,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                 st.session_state['c_tarifa'] = st.session_state.get('w_tarifa', tarifa_default)
                 
                 col_tarifa_a_buscar = MAPEO_TARIFAS.get(st.session_state.get('c_tarifa'), "costo_ssas")
-                
-                # REGLA EXCLUSIVA PARA CLÍNICA MÓVIL
                 es_cliente_privado = (st.session_state.get('c_origen') == "Propio Cristian")
                 
                 cat_disp = []
@@ -996,9 +1118,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                 
                 tabs_names = [f"{EMOJIS_CAT.get(c, '🔧')} {c}" for c in cat_disp]
                 tabs_names.extend(["📝 Manual", "🛒 Repuestos"])
-                
-                if es_cliente_privado:
-                    tabs_names.append("🚑 Clínica Móvil (Excel)")
+                if es_cliente_privado: tabs_names.append("🚑 Clínica Móvil (Excel)")
                 
                 tabs_cat = st.tabs(tabs_names)
                 
@@ -1030,8 +1150,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                             guardar_trabajo_manual_db(dm, pm) 
                             guardar_borrador()
                             st.toast("✅ Trabajo manual añadido al carrito", icon="🔧")
-                            time.sleep(0.5)
-                            st.rerun()
+                            time.sleep(0.5); st.rerun()
                             
                     h_manuales = cargar_trabajos_manuales_historicos()
                     if h_manuales:
@@ -1044,8 +1163,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                                     st.session_state.lista_particular.append({"Tipo": "manual", "Descripción": hm['descripcion'], "Cantidad": 1, "Unitario_Costo": hm['costo'], "Total_Costo": hm['costo']})
                                     guardar_borrador()
                                     st.toast("✅ Trabajo manual añadido al carrito", icon="🔧")
-                                    time.sleep(0.5)
-                                    st.rerun()
+                                    time.sleep(0.5); st.rerun()
 
                 idx_rep = len(cat_disp) + 1
                 with tabs_cat[idx_rep]:
@@ -1064,10 +1182,8 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                             st.session_state.lista_repuestos.append({"Tipo": "repuesto", "Descripción": d_rep, "Cantidad": q_rep, "Unitario_Costo": float(p_final), "Total_Costo": float(p_final * q_rep)})
                             guardar_borrador()
                             st.toast("✅ Repuesto añadido al carrito", icon="🛒")
-                            time.sleep(0.5)
-                            st.rerun()
+                            time.sleep(0.5); st.rerun()
                             
-                # MÓDULO DE CLÍNICA MÓVIL (EXCEL INTEGRADO)
                 if es_cliente_privado:
                     idx_clinica = len(cat_disp) + 2
                     with tabs_cat[idx_clinica]:
@@ -1108,8 +1224,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                                 st.toast(f"✅ {items_added} ítems añadidos al carrito", icon="🚑")
                                 st.session_state.df_proyectos = pd.DataFrame([{"Descripción": "", "Cantidad": 1, "Valor Neto": 0}])
                                 guardar_borrador()
-                                time.sleep(0.5)
-                                st.rerun()
+                                time.sleep(0.5); st.rerun()
                             else:
                                 st.warning("No hay ítems válidos para agregar. (Falta descripción o valor mayor a 0).")
                             
@@ -1133,9 +1248,13 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                     iv = tn * 0.19
                     tf = tn + iv
                     
+                    st.markdown("### Configuración del Documento")
+                    c_f1, c_f2 = st.columns(2)
+                    # MODIFICADOR DE FECHA PARA EL PDF
+                    fecha_pdf_sel = c_f1.date_input("Fecha de Emisión del Presupuesto:", value=datetime.today())
+                    est = c_f2.radio("Fase del Trabajo:", ("En Espera de Aprobación", "Trabajo Realizado"))
                     obs = st.text_area("Observaciones para el Taller/Cliente:")
                     fotos_in = st.file_uploader("📸 Adjuntar Evidencia Fotográfica (Opcional)", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
-                    est = st.radio("Fase del Trabajo:", ("En Espera de Aprobación", "Trabajo Realizado"))
                     
                     st.markdown("---")
                     if st.button("💾 GUARDAR Y GENERAR PDF", type="primary", use_container_width=True):
@@ -1160,7 +1279,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                                 
                                 if sol_id:
                                     corr_id = str(sol_id)
-                                    pdf_b = generar_pdf_oficial(pat_oficial, c_marca_val, c_modelo_val, c_cli_fac_val, c_rut_fac_val, sel_final, tn, False, est, c_us_final_val, obs, corr_id, c_nsap_val, fotos_in)
+                                    pdf_b = generar_pdf_oficial(pat_oficial, c_marca_val, c_modelo_val, c_cli_fac_val, c_rut_fac_val, sel_final, tn, False, est, c_us_final_val, obs, corr_id, fecha_pdf_sel, c_nsap_val, fotos_in)
                                     n_pdf = f"Presupuesto_{corr_id}_{pat_safe}.pdf"
                                     
                                     url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
@@ -1184,7 +1303,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                                         "fecha_creacion": fecha_actual
                                     }).execute()
                                     corr_id = str(res.data[0]['id_cotizacion'])
-                                    pdf_b = generar_pdf_oficial(pat_oficial, c_marca_val, c_modelo_val, c_cli_fac_val, c_rut_fac_val, sel_final, tn, False, est, c_us_final_val, obs, corr_id, "", fotos_in)
+                                    pdf_b = generar_pdf_oficial(pat_oficial, c_marca_val, c_modelo_val, c_cli_fac_val, c_rut_fac_val, sel_final, tn, False, est, c_us_final_val, obs, corr_id, fecha_pdf_sel, "", fotos_in)
                                     n_pdf = f"Presupuesto_{corr_id}_{pat_safe}.pdf"
                                     
                                     url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
@@ -1235,43 +1354,40 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                                     sol_id = st.session_state.get('sol_activa')
                                     id_a_actualizar = sol_id if sol_id else int(num_pres)
                                     supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", id_a_actualizar).execute()
-                                    st.success("✅ Enviado exitosamente. Actualizando estado de la orden...")
-                                    time.sleep(1.5)
+                                    st.success("✅ Enviado exitosamente. La orden pasará a 'Esperando Aprobación'...")
+                                    time.sleep(1.8)
                                     limpiar_sesiones()
-                                    st.session_state.vista_taller = "Historial"
+                                    st.session_state.vista_taller = "Bandeja"
                                     st.rerun()
                                 else: st.error(f"❌ {m}")
                             else: st.warning("Debes seleccionar al menos un destinatario de la lista o ingresar uno manualmente.")
 
                     st.markdown("---")
-                    if st.button("🏠 Finalizar y Volver al Inicio", type="primary"):
+                    if st.button("🏠 Finalizar y Volver al Kanban", type="primary"):
                         limpiar_sesiones()
                         st.session_state.vista_taller = "Bandeja"
                         st.rerun()
 
     elif st.session_state.vista_taller == "Historial":
-        st.title("🗃️ Registro General e Historial")
+        st.title("🗃️ Registro General Histórico")
+        st.info("Esta vista es un visor de Excel masivo para buscar. La gestión operativa ahora se hace desde la **Bandeja de Entrada (Kanban)**.")
         df_todo = extraer_historial_completo()
         
         if not df_todo.empty:
             df_view = df_todo.copy()
-            
             lupa = st.text_input("🔍 Búsqueda Universal (Escribe patente, marca, cliente, ID, fecha o estado...)").upper()
             if lupa:
                 lupa_limpia = lupa.replace("-", "").replace(" ", "")
                 mask = df_view.astype(str).apply(lambda row: ' '.join(row.values).replace("-", "").replace(" ", "").upper(), axis=1).str.contains(lupa_limpia, case=False, na=False)
                 df_view = df_view[mask]
 
-            st.markdown("---")
-            st.subheader("📚 Todos los Registros")
-            
             df_mostrar = df_view.copy()
             if 'total_clp' in df_mostrar.columns:
                 df_mostrar['total_clp'] = df_mostrar['total_clp'].apply(lambda x: format_clp(x) if pd.notna(x) else "")
             if 'patente' in df_mostrar.columns:
                 df_mostrar['patente'] = df_mostrar['patente'].apply(lambda x: formatear_patente(x))
                 
-            cols_to_show = ['id_cotizacion', 'fecha_creacion', 'patente', 'marca', 'modelo', 'nombre_cliente_manual', 'usuario_final', 'estado', 'total_clp', 'fecha_aprobacion', 'pdf_url']
+            cols_to_show = ['id_cotizacion', 'fecha_creacion', 'patente', 'marca', 'modelo', 'nombre_cliente_manual', 'usuario_final', 'estado', 'total_clp', 'fecha_aprobacion', 'fecha_entrega', 'pdf_url']
             exist_cols = [c for c in cols_to_show if c in df_mostrar.columns]
             
             st.dataframe(
@@ -1280,84 +1396,3 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                 use_container_width=True,
                 hide_index=True
             )
-
-            st.markdown("---")
-            st.subheader("⚙️ Gestión de Órdenes Pendientes")
-            
-            t1, t2, t3 = st.tabs(["🟡 Por Enviar", "🔵 Enviados", "🟢 Aprobados (Marcar Realizado)"])
-            with t1:
-                df_gen = df_view[df_view['estado'] == 'Generado']
-                for idx, r in df_gen.iterrows():
-                    ca, cb, cc, cd = st.columns([3.5, 1.5, 1.5, 1])
-                    pat_f = formatear_patente(r['patente'])
-                    ca.write(f"📄 N° {r['id_cotizacion']} | Patente: {pat_f} | Total: {format_clp(r['total_clp'])}")
-                    url_pdf = r.get('pdf_url')
-                    if pd.notna(url_pdf) and isinstance(url_pdf, str) and url_pdf.startswith('http'):
-                        cb.link_button("👁️ Ver PDF", url_pdf)
-                    else: cb.info("Sin Archivo")
-                        
-                    if cc.button("✉️ Marcar Manualmente", key=f"e_{r['id_cotizacion']}"):
-                        supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
-                        st.rerun()
-                    if cd.button("🗑️ Anular", key=f"del1_{r['id_cotizacion']}"):
-                        supabase.table("historial_trabajos").update({"estado": "Anulado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
-                        st.rerun()
-
-                    if pd.notna(url_pdf) and isinstance(url_pdf, str):
-                        with st.expander("📧 Enviar PDF por Correo al Cliente"):
-                            us_final = r.get('usuario_final', '')
-                            num_pres = str(r['id_cotizacion'])
-                            asunto_def = f"{pat_f} - {us_final} - Presupuesto {num_pres} - C.H. Servicio Automotriz"
-                            e_as = st.text_input("Asunto:", value=asunto_def.upper(), key=f"as_{num_pres}")
-                            
-                            # AQUÍ SE CORRIGIÓ EL ERROR (pat_formateada por pat_f)
-                            e_ms = st.text_area("Mensaje:", value=f"Estimado(a),\n\nAdjunto enviamos el presupuesto solicitado para la patente {pat_f}.\n\nSaludos cordiales.", key=f"ms_{num_pres}")
-                            
-                            dir_c = cargar_directorio_correos()
-                            d_sel = st.multiselect("Contactos Frecuentes (Directorio):", options=list(dir_c.keys()), default=[], key=f"msel_{num_pres}")
-                            e_ad = st.text_input("Correos Adicionales (separados por coma):", key=f"ad_{num_pres}")
-                            
-                            if st.button("📤 Enviar Correo", type="primary", key=f"btn_env_{num_pres}"):
-                                lc = [dir_c[n] for n in d_sel]
-                                if e_ad: lc.extend([e.strip() for e in e_ad.split(',') if e.strip()])
-                                dfinal = ", ".join(lc)
-                                if dfinal:
-                                    with st.spinner("Descargando PDF y Enviando..."):
-                                        pdf_bytes = requests.get(url_pdf).content
-                                        n_pdf = f"Presupuesto_{num_pres}.pdf"
-                                        ex, m = enviar_correo(dfinal, e_as, e_ms, pdf_bytes, n_pdf, EMAIL_SISTEMA)
-                                    if ex:
-                                        supabase.table("historial_trabajos").update({"estado": "Enviado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
-                                        st.success("✅ Enviado exitosamente.")
-                                        time.sleep(1.5)
-                                        st.rerun()
-                                    else: st.error(f"❌ {m}")
-                                else: st.warning("Debes seleccionar al menos un destinatario de la lista o ingresar uno manualmente.")
-
-            with t2:
-                df_env = df_view[df_view['estado'] == 'Enviado']
-                for idx, r in df_env.iterrows():
-                    ca, cb, cc, cd = st.columns([3.5, 1.5, 1.5, 1])
-                    ca.write(f"🔵 N° {r['id_cotizacion']} | Patente: {formatear_patente(r['patente'])} | Total: {format_clp(r['total_clp'])}")
-                    url_pdf = r.get('pdf_url')
-                    if pd.notna(url_pdf) and isinstance(url_pdf, str) and url_pdf.startswith('http'):
-                        cb.link_button("👁️ Ver PDF", url_pdf)
-                    else: cb.info("Sin Archivo")
-                    cc.info("Esperando Aprobación")
-                    if cd.button("🗑️ Anular", key=f"del2_{r['id_cotizacion']}"):
-                        supabase.table("historial_trabajos").update({"estado": "Anulado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
-                        st.rerun()
-
-            with t3:
-                df_apr = df_view[df_view['estado'] == 'Aprobado']
-                if not df_apr.empty:
-                    for idx, r in df_apr.iterrows():
-                        ca, cb, cc = st.columns([4, 1.5, 2])
-                        ca.write(f"🟢 N° {r['id_cotizacion']} | Patente: {formatear_patente(r['patente'])} | Total: {format_clp(r['total_clp'])}")
-                        url_pdf = r.get('pdf_url')
-                        if pd.notna(url_pdf) and isinstance(url_pdf, str) and url_pdf.startswith('http'):
-                            cb.link_button("👁️ Ver PDF", url_pdf)
-                        else: cb.info("Sin Archivo")
-                        if cc.button("🛠️ Marcar Realizado/Terminado", key=f"term_{r['id_cotizacion']}", type="primary"):
-                            supabase.table("historial_trabajos").update({"estado": "Terminado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
-                            st.success("¡Trabajo finalizado en Taller!"); time.sleep(1); st.rerun()
