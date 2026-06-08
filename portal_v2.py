@@ -114,9 +114,8 @@ MAPEO_TARIFAS = {
 }
 
 # ==========================================
-# 3. GENERADOR DE PDF Y UTILS DE CORREO
+# 3. GENERADOR DE PDF Y UTILS
 # ==========================================
-# CORRECCIÓN: Evitar NaN en el formato CLP
 def format_clp(v): 
     if pd.isna(v) or v is None: return "$0"
     try: return f"${float(v):,.0f}".replace(",", ".")
@@ -132,6 +131,19 @@ def formatear_patente(patente):
         if len(p_clean) > 2: return f"{p_clean[:2]}-{p_clean[2:]}"
         return p_clean
     return pat_str
+
+def formatear_rut(rut):
+    if pd.isna(rut) or rut is None: return ""
+    rut_str = str(rut).strip().upper().replace(".", "").replace("-", "")
+    if not rut_str or rut_str in ["NAN", "NONE"]: return ""
+    if len(rut_str) < 2: return rut_str
+    cuerpo = rut_str[:-1]
+    dv = rut_str[-1]
+    try:
+        cuerpo_fmt = f"{int(cuerpo):,}".replace(",", ".")
+        return f"{cuerpo_fmt}-{dv}"
+    except:
+        return f"{cuerpo}-{dv}"
 
 def notificar_cristian_nueva_ot(patente, marca, modelo, dest, desc):
     try:
@@ -285,13 +297,13 @@ def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, ite
     
     fecha_txt = fecha_presupuesto.strftime('%d/%m/%Y')
     
+    # FORMATEO DE RUT Y ELIMINACIÓN DE LA VALIDEZ DE LA TABLA
     fila_dinamica(" Señor(es)", str(cliente_nombre).upper(), " Fecha Emisión", fecha_txt)
     if n_sap_txt:
-        fila_dinamica(" RUT", str(cliente_rut).upper(), " N° OT / SAP", str(n_sap_txt).upper())
-        fila_dinamica(" Validez", "30 DÍAS", " Usuario Final", str(usuario_final_txt).upper(), is_last=True)
-    else:
-        fila_dinamica(" RUT", str(cliente_rut).upper(), " Validez", "30 DÍAS")
+        fila_dinamica(" RUT", formatear_rut(cliente_rut), " N° OT / SAP", str(n_sap_txt).upper())
         fila_dinamica(" ", "", " Usuario Final", str(usuario_final_txt).upper(), is_last=True)
+    else:
+        fila_dinamica(" RUT", formatear_rut(cliente_rut), " Usuario Final", str(usuario_final_txt).upper(), is_last=True)
     pdf.ln(4)
     
     pdf.set_font('Arial', 'B', 10)
@@ -352,6 +364,13 @@ def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, ite
         pdf.cell(0, 6, "OBSERVACIONES:", 0, 1)
         pdf.set_font('Arial', '', 9)
         pdf.multi_cell(0, 5, str(observaciones), 0, 'L')
+    
+    # MENSAJE DE VALIDEZ Y GARANTÍA MOVIDO AL FINAL
+    pdf.ln(8)
+    pdf.set_font('Arial', 'I', 9)
+    pdf.set_text_color(100, 100, 100)
+    pdf.cell(0, 5, "Validez presupuesto: 30 días. Garantía: 3 meses.", 0, 1, 'C')
+    pdf.set_text_color(0, 0, 0)
         
     if fotos_subidas:
         pdf.add_page()
@@ -643,7 +662,6 @@ with st.sidebar:
             st.rerun()
         st.markdown("---")
         
-        # MÓDULO DE CARRITO GLOBAL EN LA BARRA LATERAL PARA CRISTIAN
         if st.session_state.get('vista_taller') == "Cotizador" and st.session_state.get('sub_paso', 0) > 0:
             st.markdown("### 🛒 Resumen en Vivo")
             refrescar_carrito_global()
@@ -881,13 +899,18 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
             # KANBAN TABS
             t1, t2, t3, t4 = st.tabs(["🆕 Por Cotizar / Generados", "⏳ Esperando Aprobación", "🛠️ En Taller (En Proceso)", "✅ Realizados"])
             
+            def get_marca_modelo_txt(fila):
+                if pd.notna(fila.get('marca')) and fila['marca'] != '--- Seleccione Marca ---':
+                    return f" | {fila['marca']} {fila.get('modelo', '')}"
+                return ""
+
             # --- TAB 1: POR COTIZAR (Requerido / Generado) ---
             with t1:
                 df_req = df_todo[df_todo['estado'].isin(['Requerido', 'Generado'])]
                 if not df_req.empty:
                     for idx, fila in df_req.iterrows():
                         pat = fila['patente'] if pd.notna(fila['patente']) else 'S/P'
-                        m_txt = f" | {fila.get('marca', '')} {fila.get('modelo', '')}" if pd.notna(fila.get('marca')) else ""
+                        m_txt = get_marca_modelo_txt(fila)
                         
                         bg_color = "#ffe6e6" if fila['estado'] == 'Requerido' else "#fff3e6"
                         border_color = "#ff4d4d" if fila['estado'] == 'Requerido' else "#ff9933"
@@ -906,7 +929,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                             supabase.table("historial_trabajos").update({"estado": "Descartado"}).eq("id_cotizacion", fila['id_cotizacion']).execute()
                             st.toast("Movido a descartados."); time.sleep(1); st.rerun()
                         
-                        # Botones de Acción Rápida para los Borradores estancados
                         if fila['estado'] == 'Generado':
                             st.markdown("<small><i>Acciones Rápidas (Para mover la orden sin abrirla):</i></small>", unsafe_allow_html=True)
                             ca, cb = st.columns(2)
@@ -939,9 +961,10 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                 df_env = df_todo[df_todo['estado'] == 'Enviado']
                 if not df_env.empty:
                     for idx, r in df_env.iterrows():
+                        m_txt = get_marca_modelo_txt(r)
                         st.markdown(f"""
                         <div style="background-color: #e6f2ff; padding: 15px; border-left: 5px solid #0066cc; border-radius: 4px; margin-bottom: 10px; color: #111827;">
-                            <h4 style="color: #111827; margin-top: 0;">📤 Enviado al Cliente - Orden N° {r['id_cotizacion']} | Patente: {formatear_patente(r['patente'])}</h4>
+                            <h4 style="color: #111827; margin-top: 0;">📤 Enviado al Cliente - Orden N° {r['id_cotizacion']} | Patente: {formatear_patente(r['patente'])}{m_txt}</h4>
                             <p style="margin-bottom: 0;"><strong>Destino:</strong> {r.get('usuario_final', '')} | <strong>Total Neto:</strong> {format_clp(r['total_clp'])}</p>
                         </div>
                         """, unsafe_allow_html=True)
@@ -964,6 +987,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                 df_taller = df_todo[df_todo['estado'].isin(['Aprobado', 'En Proceso'])]
                 if not df_taller.empty:
                     for idx, r in df_taller.iterrows():
+                        m_txt = get_marca_modelo_txt(r)
                         semaforo_txt = ""
                         color_borde = "#33cc33"
                         if r['estado'] == 'En Proceso' and pd.notna(r.get('fecha_entrega')):
@@ -989,7 +1013,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
 
                         st.markdown(f"""
                         <div style="background-color: {bg_taller}; padding: 15px; border-left: 5px solid {color_borde}; border-radius: 4px; margin-bottom: 10px; color: #111827;">
-                            <h4 style="color: #111827; margin-top: 0;">{titulo_taller} - Orden N° {r['id_cotizacion']} | {formatear_patente(r['patente'])}</h4>
+                            <h4 style="color: #111827; margin-top: 0;">{titulo_taller} - Orden N° {r['id_cotizacion']} | {formatear_patente(r['patente'])}{m_txt}</h4>
                             <p style="margin-bottom: 0;"><strong>Destino:</strong> {r.get('usuario_final', '')} | <strong>Aprobado el:</strong> {r.get('fecha_aprobacion', 'N/A')} | <strong>Total Neto:</strong> {format_clp(r['total_clp'])}</p>
                         </div>
                         """, unsafe_allow_html=True)
@@ -1021,8 +1045,10 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                     if 'total_clp' in df_term_show.columns:
                         df_term_show['total_clp'] = df_term_show['total_clp'].apply(lambda x: format_clp(x))
                     
+                    exist_term_cols = [c for c in ['id_cotizacion', 'fecha_aprobacion', 'patente', 'marca', 'modelo', 'usuario_final', 'total_clp'] if c in df_term_show.columns]
+                    
                     st.dataframe(
-                        df_term_show[['id_cotizacion', 'fecha_aprobacion', 'patente', 'usuario_final', 'total_clp']], 
+                        df_term_show[exist_term_cols], 
                         column_config={
                             "total_clp": st.column_config.TextColumn("Total Neto")
                         },
@@ -1268,7 +1294,14 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                     
                     st.markdown("### Configuración del Documento")
                     c_f1, c_f2 = st.columns(2)
-                    fecha_pdf_sel = c_f1.date_input("Fecha de Emisión del Presupuesto:", value=datetime.today())
+                    
+                    # SELECTOR DE FECHA CONDICIONADO
+                    if st.session_state.get('c_tarifa') == 'Cliente Particular':
+                        fecha_pdf_sel = c_f1.date_input("Fecha de Emisión del Presupuesto:", value=datetime.today())
+                    else:
+                        fecha_pdf_sel = datetime.today().date()
+                        c_f1.markdown(f"**Fecha de Emisión:** {fecha_pdf_sel.strftime('%d/%m/%Y')} *(Automática por sistema)*")
+                        
                     est = c_f2.radio("Fase del Trabajo:", ("En Espera de Aprobación", "Trabajo Realizado"))
                     obs = st.text_area("Observaciones para el Taller/Cliente:")
                     fotos_in = st.file_uploader("📸 Adjuntar Evidencia Fotográfica (Opcional)", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
@@ -1294,7 +1327,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                                 fecha_actual = get_fecha_hora_chile()
                                 pat_safe = pat_oficial.replace("-", "") if pat_oficial != "S/P" else "SP"
                                 
-                                # LÓGICA DE SALTO DIRECTO: Si marcó Trabajo Realizado, se salta el Kanban directo a Terminado
                                 estado_final_db = "Terminado" if est == "Trabajo Realizado" else "Generado"
                                 
                                 if sol_id:
@@ -1351,7 +1383,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                     
                     c_wsp, c_mail = st.columns(2)
                     
-                    # BOTÓN DE WHATSAPP / EXTERNO
                     with c_wsp:
                         st.info("¿Ya enviaste este documento por tu cuenta?")
                         if st.button("📱 Lo envié por WhatsApp / Medios Externos", use_container_width=True):
@@ -1367,7 +1398,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                             st.session_state.vista_taller = "Bandeja"
                             st.rerun()
                     
-                    # MENÚ DE CORREO TRADICIONAL
                     with c_mail:
                         with st.expander("✉️ Enviar por Correo desde el Sistema"):
                             num_pres = d['corr_id']
