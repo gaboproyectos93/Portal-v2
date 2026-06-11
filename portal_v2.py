@@ -114,7 +114,7 @@ MAPEO_TARIFAS = {
 }
 
 # ==========================================
-# 3. GENERADOR DE PDF Y UTILS DE CORREO
+# 3. GENERADOR DE PDF Y UTILS
 # ==========================================
 def format_clp(v): 
     if pd.isna(v) or v is None: return "$0"
@@ -192,6 +192,29 @@ def notificar_cristian_aprobacion(patente, id_cot):
         return True
     except Exception as e: return False
 
+def notificar_cristian_aprobacion_parcial(patente, id_cot, version):
+    try:
+        remitente = st.secrets["email"]["user"]
+        password = st.secrets["email"]["password"]
+        destinatario = "c.h.servicioautomotriz@gmail.com"
+        msg = MIMEMultipart()
+        msg['From'] = f"Planificación Kaufmann GPR <{remitente}>"
+        msg['To'] = destinatario
+        msg['Subject'] = f"⚠️ PRESUPUESTO MODIFICADO - Patente: {formatear_patente(patente)}"
+        
+        cuerpo = f"Hola Cristian,\n\nTe informo que he realizado una APROBACIÓN PARCIAL (Modificación) para el presupuesto N° {id_cot}.\n\n"
+        cuerpo += f"El sistema ha generado automáticamente la Versión {version} (V{version}) excluyendo los ítems rechazados. Este nuevo documento ya se encuentra Aprobado en la plataforma.\n\n"
+        cuerpo += "Por favor, ingresa a la pestaña 'En Taller' para definir la fecha de entrega.\n\nSaludos,\nGabriel Poblete"
+        
+        msg.attach(MIMEText(cuerpo, 'plain'))
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(remitente, password)
+        server.send_message(msg)
+        server.quit()
+        return True
+    except Exception as e: return False
+
 def enviar_correo(destinatario, asunto, mensaje_texto, pdf_bytes, nombre_archivo, email_reply):
     try:
         remitente_sistema = st.secrets["email"]["user"]
@@ -256,24 +279,44 @@ class PDF(FPDF):
         self.cell(0, 4, "Documento generado por sistema cotizaciones GPR", 0, 0, 'R')
         self.set_text_color(0, 0, 0)
 
-def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, items, total_neto, is_official, estado_trabajo, usuario_final_txt, observaciones, correlativo, fecha_presupuesto, n_sap_txt="", fotos_subidas=None):
+def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, items, total_neto, is_official, estado_trabajo, usuario_final_txt, observaciones, correlativo, fecha_presupuesto, n_sap_txt="", version=1, fotos_subidas=None):
     pat_str = formatear_patente(patente)
         
     pdf = PDF(correlativo=correlativo, patente=pat_str, official=is_official)
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=30) 
     
+    # MARCA DE AGUA PARA CONTROL DE VERSIONES
+    if version > 1:
+        pdf.set_y(35)
+        pdf.set_font('Arial', 'B', 10)
+        pdf.set_text_color(220, 0, 0)
+        pdf.cell(0, 6, f"📌 PRESUPUESTO MODIFICADO / APROBACIÓN PARCIAL (V{version})", 0, 1, 'C')
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_y(45)
+    else:
+        pdf.set_y(45)
+    
+    # CORRECCIÓN DEL FANTASMA DE LOS DOS PUNTOS (:)
     def fila_dinamica(lbl1, val1, lbl2, val2, is_last=False):
         start_y = pdf.get_y()
         pdf.set_font('Arial', 'B', 9)
         pdf.set_xy(10, start_y)
-        pdf.cell(25, 6, lbl1, 0, 0, 'L')
-        pdf.set_font('Arial', '', 9)
-        pdf.set_xy(35, start_y)
-        pdf.multi_cell(70, 6, f": {val1}", 0, 'L')
+        
+        if lbl1 and lbl1.strip():
+            pdf.cell(25, 6, lbl1, 0, 0, 'L')
+            pdf.set_font('Arial', '', 9)
+            pdf.set_xy(35, start_y)
+            pdf.multi_cell(70, 6, f": {val1}", 0, 'L')
+        else:
+            pdf.cell(25, 6, "", 0, 0, 'L')
+            pdf.set_font('Arial', '', 9)
+            pdf.set_xy(35, start_y)
+            pdf.multi_cell(70, 6, "", 0, 'L')
+            
         y_left = pdf.get_y()
         
-        if lbl2: 
+        if lbl2 and lbl2.strip(): 
             pdf.set_font('Arial', 'B', 9)
             pdf.set_xy(105, start_y)
             pdf.cell(30, 6, lbl2, 0, 0, 'L')
@@ -281,14 +324,15 @@ def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, ite
             pdf.set_xy(135, start_y)
             pdf.multi_cell(65, 6, f": {val2}", 0, 'L')
             y_right = pdf.get_y()
+        else:
+            y_right = start_y
             
-        my = max(y_left, pdf.get_y(), start_y + 6)
+        my = max(y_left, y_right, start_y + 6)
         pdf.line(10, start_y, 10, my)
         pdf.line(200, start_y, 200, my)
         if is_last: pdf.line(10, my, 200, my)
         pdf.set_xy(10, my)
         
-    pdf.set_y(45)
     pdf.set_font('Arial', 'B', 10)
     pdf.set_fill_color(10, 37, 64)
     pdf.set_text_color(255, 255, 255)
@@ -297,7 +341,6 @@ def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, ite
     
     fecha_txt = fecha_presupuesto.strftime('%d/%m/%Y')
     
-    # FORMATEO DE RUT
     fila_dinamica(" Señor(es)", str(cliente_nombre).upper(), " Fecha Emisión", fecha_txt)
     if n_sap_txt:
         fila_dinamica(" RUT", formatear_rut(cliente_rut), " N° OT / SAP", str(n_sap_txt).upper())
@@ -364,6 +407,15 @@ def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, ite
         pdf.cell(0, 6, "OBSERVACIONES:", 0, 1)
         pdf.set_font('Arial', '', 9)
         pdf.multi_cell(0, 5, str(observaciones), 0, 'L')
+    
+    pdf.ln(8)
+    pdf.set_font('Arial', 'I', 9)
+    pdf.set_text_color(100, 100, 100)
+    pdf.cell(0, 5, "Validez presupuesto: 30 días. Garantía: 3 meses.", 0, 1, 'C')
+    
+    pdf.ln(2)
+    pdf.set_text_color(0, 0, 0)
+    pdf.cell(0, 6, f"Padre las Casas, {fecha_presupuesto.strftime('%d-%m-%Y')}", 0, 1, 'C')
         
     if fotos_subidas:
         pdf.add_page()
@@ -394,17 +446,6 @@ def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, ite
                 os.remove(tmp_path)
             except Exception as e: print(f"Error insertando imagen: {e}")
 
-    # TEXTO DE VALIDEZ Y FECHA AL FINAL DEL DOCUMENTO
-    pdf.ln(15)
-    pdf.set_font('Arial', 'I', 9)
-    pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 5, "Validez presupuesto: 30 días. Garantía: 3 meses.", 0, 1, 'C')
-    
-    pdf.ln(2)
-    pdf.set_text_color(0, 0, 0)
-    # FECHA DE EMISIÓN SELECCIONADA POR CRISTIAN, NO LA DE IMPRESIÓN
-    pdf.cell(0, 6, f"Padre las Casas, {fecha_presupuesto.strftime('%d-%m-%Y')}", 0, 1, 'C')
-    
     salida = pdf.output(dest='S')
     return salida.encode('latin-1') if isinstance(salida, str) else bytes(salida)
 
@@ -436,6 +477,44 @@ def subir_pdf_a_storage(nombre_archivo, pdf_bytes):
     except Exception as e: 
         st.error(f"Error Técnico de Supabase al subir PDF: {str(e)}")
         return None
+
+def procesar_aprobacion_parcial(row_data, items_aprobados):
+    try:
+        dir_res = supabase.table("directorio_vehiculos").select("*").eq("patente", row_data['patente']).execute()
+        rut_cli = dir_res.data[0].get('rut_facturacion', '') if dir_res.data else ""
+        
+        nueva_version = row_data.get('version_presupuesto', 1) + 1
+        nuevo_total = sum(i['Total_Costo'] for i in items_aprobados)
+        
+        pdf_bytes = generar_pdf_oficial(
+            patente=row_data['patente'], marca=row_data['marca'], modelo=row_data['modelo'],
+            cliente_nombre=row_data['nombre_cliente_manual'], cliente_rut=rut_cli,
+            items=items_aprobados, total_neto=nuevo_total, is_official=False,
+            estado_trabajo="Aprobado", usuario_final_txt=row_data['usuario_final'],
+            observaciones="Presupuesto modificado (Aprobación Parcial).", correlativo=str(row_data['id_cotizacion']),
+            fecha_presupuesto=datetime.today().date(), n_sap_txt=row_data.get('n_sap', ''), version=nueva_version
+        )
+        
+        pat_safe = row_data['patente'].replace("-", "")
+        n_pdf = f"Presupuesto_{row_data['id_cotizacion']}_{pat_safe}_V{nueva_version}.pdf"
+        url_doc = subir_pdf_a_storage(n_pdf, pdf_bytes)
+        
+        if url_doc:
+            supabase.table("historial_trabajos").update({
+                "estado": "Aprobado",
+                "total_clp": nuevo_total,
+                "pdf_url": url_doc,
+                "detalle_items": items_aprobados,
+                "version_presupuesto": nueva_version,
+                "fecha_aprobacion": get_fecha_hora_chile()
+            }).eq("id_cotizacion", row_data['id_cotizacion']).execute()
+            
+            notificar_cristian_aprobacion_parcial(row_data['patente'], row_data['id_cotizacion'], nueva_version)
+            return True
+        return False
+    except Exception as e:
+        print(f"Error procesando parcial: {e}")
+        return False
 
 def registrar_solicitud_gabo(patente, contacto, telefono, correo, origen, destino_txt, tarifa_math, descripcion, n_sap, marca=None, modelo=None):
     try:
@@ -554,7 +633,7 @@ def limpiar_sesiones():
         'c_us_final', 'c_marca', 'c_modelo', 'c_tarifa', 'c_nsap', 'lista_particular', 
         'lista_repuestos', 'presupuesto_generado', 'sel_final_cache', 'df_proyectos',
         'g_patente', 'g_vehiculo_existe', 'g_marca', 'g_modelo', 'g_dest_txt', 
-        'g_tarifa', 'g_nsap', 'hay_borrador', 'borrador_check', 'c_patente_in'
+        'g_tarifa', 'g_nsap', 'hay_borrador', 'borrador_check', 'c_patente_in', 'version_presupuesto'
     ]
     for k in list(st.session_state.keys()):
         if k in claves_a_borrar or k.startswith("w_") or k.startswith("q_"):
@@ -663,7 +742,6 @@ with st.sidebar:
             st.rerun()
         st.markdown("---")
         
-        # MÓDULO DE CARRITO GLOBAL EN LA BARRA LATERAL PARA CRISTIAN
         if st.session_state.get('vista_taller') == "Cotizador" and st.session_state.get('sub_paso', 0) > 0:
             st.markdown("### 🛒 Resumen en Vivo")
             refrescar_carrito_global()
@@ -745,12 +823,31 @@ elif (st.session_state.get('rol') == "Planificador" or st.session_state.usuario 
                     
                     enviar_noti_aprob = cc.checkbox("📧 Notificar a Cristian", value=True, key=f"chk_apr_{r['id_cotizacion']}")
                     
-                    if cd.button("✅ Aprobar Trabajo", key=f"apr_gb_{r['id_cotizacion']}", type="primary", use_container_width=True):
+                    if cd.button("✅ Aprobar Trabajo Completo", key=f"apr_gb_{r['id_cotizacion']}", type="primary", use_container_width=True):
                         fecha_aprob = get_fecha_hora_chile()
                         supabase.table("historial_trabajos").update({"estado": "Aprobado", "fecha_aprobacion": fecha_aprob}).eq("id_cotizacion", r['id_cotizacion']).execute()
                         if enviar_noti_aprob:
                             notificar_cristian_aprobacion(r['patente'], r['id_cotizacion'])
                         st.success("Trabajo Aprobado."); time.sleep(1); st.rerun()
+                        
+                    # MÓDULO DE APROBACIÓN PARCIAL (GABO)
+                    with st.expander("✂️ Aprobación Parcial (Modificar ítems)"):
+                        items_actuales = r.get('detalle_items', [])
+                        if items_actuales and isinstance(items_actuales, list):
+                            st.write("Desmarca los ítems que el cliente rechazó:")
+                            items_aprobados = []
+                            for it in items_actuales:
+                                if st.checkbox(f"{it['Cantidad']}x {it['Descripción']} ({format_clp(it['Total_Costo'])})", value=True, key=f"chk_p_{r['id_cotizacion']}_{it['Llave']}"):
+                                    items_aprobados.append(it)
+                            
+                            if st.button("Confirmar Aprobación Parcial (Genera Versión Nueva)", key=f"btn_parcial_{r['id_cotizacion']}", type="primary"):
+                                with st.spinner("Procesando nueva versión..."):
+                                    if procesar_aprobacion_parcial(r, items_aprobados):
+                                        st.success("¡Presupuesto Modificado y Aprobado exitosamente!")
+                                        time.sleep(2)
+                                        st.rerun()
+                        else:
+                            st.info("Este presupuesto antiguo no tiene detalles guardados en memoria para ser modificado.")
             else: st.info("No hay cotizaciones pendientes de tu aprobación.")
             
             st.markdown("---")
@@ -954,6 +1051,15 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                             st.session_state.c_nsap = fila.get('n_sap', '')
                             st.session_state.c_marca = fila.get('marca') if pd.notna(fila.get('marca')) else None
                             st.session_state.c_modelo = fila.get('modelo') if pd.notna(fila.get('modelo')) else None
+                            
+                            # Precarga de ítems si es que iba a re-cotizar un borrador
+                            items_guardados = fila.get('detalle_items', [])
+                            if isinstance(items_guardados, list) and items_guardados:
+                                st.session_state.sel_final_cache = items_guardados
+                                for item in items_guardados:
+                                    if item['Tipo'] == 'matriz':
+                                        st.session_state[item['Llave']] = item['Cantidad']
+                            
                             st.session_state.sub_paso = 1 
                             st.session_state.vista_taller = "Cotizador"
                             guardar_borrador()
@@ -974,14 +1080,45 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        ca, cb, cc = st.columns([2, 2, 2])
+                        ca, cb, cc, cd = st.columns([1, 1, 1, 1])
                         if pd.notna(r.get('pdf_url')):
-                            ca.link_button("👁️ Ver PDF Enviado", r['pdf_url'], use_container_width=True)
-                        if cb.button("✅ Marcar como Aprobado (Manual)", key=f"apr_m_{r['id_cotizacion']}", type="primary", use_container_width=True):
+                            ca.link_button("👁️ Ver PDF", r['pdf_url'], use_container_width=True)
+                            
+                        # BOTÓN RE-COTIZAR (MODIFICAR PRESUPUESTO) PARA CRISTIAN
+                        if cb.button("✏️ Modificar", key=f"mod_cr_{r['id_cotizacion']}", use_container_width=True):
+                            limpiar_sesiones()
+                            st.session_state.sol_activa = r['id_cotizacion']
+                            st.session_state.c_patente = r['patente'] if pd.notna(r['patente']) else ""
+                            st.session_state.c_origen = r['origen_trabajo']
+                            st.session_state.c_us_final = r.get('usuario_final', '')
+                            st.session_state.c_tarifa = r.get('tarifa_aplicada', 'SSAS (Servicio Salud)')
+                            st.session_state.c_nsap = r.get('n_sap', '')
+                            st.session_state.c_marca = r.get('marca')
+                            st.session_state.c_modelo = r.get('modelo')
+                            st.session_state.c_cli_fac = r.get('nombre_cliente_manual', '')
+                            
+                            dir_res = buscar_vehiculo_en_directorio(r['patente'])
+                            if dir_res: st.session_state.c_rut_fac = dir_res.get('rut_facturacion', '')
+                            else: st.session_state.c_rut_fac = ""
+
+                            items_guardados = r.get('detalle_items', [])
+                            if isinstance(items_guardados, list) and items_guardados:
+                                st.session_state.sel_final_cache = items_guardados
+                                for item in items_guardados:
+                                    if item['Tipo'] == 'matriz':
+                                        st.session_state[item['Llave']] = item['Cantidad']
+                                        
+                            st.session_state.version_presupuesto = r.get('version_presupuesto', 1)
+                            st.session_state.sub_paso = 2 
+                            st.session_state.vista_taller = "Cotizador"
+                            guardar_borrador()
+                            st.rerun()
+                            
+                        if cc.button("✅ Aprobar", key=f"apr_m_{r['id_cotizacion']}", type="primary", use_container_width=True):
                             fecha_aprob = get_fecha_hora_chile()
                             supabase.table("historial_trabajos").update({"estado": "Aprobado", "fecha_aprobacion": fecha_aprob}).eq("id_cotizacion", r['id_cotizacion']).execute()
                             st.toast("¡Pasando a taller!"); time.sleep(1); st.rerun()
-                        if cc.button("🗑️ Anular", key=f"anul_{r['id_cotizacion']}", use_container_width=True):
+                        if cd.button("🗑️ Anular", key=f"anul_{r['id_cotizacion']}", use_container_width=True):
                             supabase.table("historial_trabajos").update({"estado": "Anulado"}).eq("id_cotizacion", r['id_cotizacion']).execute()
                             st.rerun()
                 else:
@@ -1331,7 +1468,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
 
                                 pat_oficial = formatear_patente(p_in)
                                 if pat_oficial != "S/P":
-                                    # CORRECCIÓN VITAL: AHORA SÍ GUARDA EL RUT EN LA BASE DE DATOS
                                     supabase.table("directorio_vehiculos").upsert({
                                         "patente": pat_oficial, 
                                         "origen_cliente": c_origen_val, 
@@ -1348,17 +1484,24 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                                 
                                 estado_final_db = "Terminado" if est == "Trabajo Realizado" else "Generado"
                                 
+                                # CONTROL DE VERSIONES
+                                version_actual = st.session_state.get('version_presupuesto', 0)
+                                if sol_id and version_actual > 0:
+                                    nueva_version = version_actual + 1
+                                else:
+                                    nueva_version = 1
+                                
                                 if sol_id:
                                     corr_id = str(sol_id)
-                                    pdf_b = generar_pdf_oficial(pat_oficial, c_marca_val, c_modelo_val, c_cli_fac_val, c_rut_fac_val, sel_final, tn, False, est, c_us_final_val, obs, corr_id, fecha_pdf_sel, c_nsap_val, fotos_in)
-                                    n_pdf = f"Presupuesto_{corr_id}_{pat_safe}.pdf"
+                                    pdf_b = generar_pdf_oficial(pat_oficial, c_marca_val, c_modelo_val, c_cli_fac_val, c_rut_fac_val, sel_final, tn, False, est, c_us_final_val, obs, corr_id, fecha_pdf_sel, c_nsap_val, nueva_version, fotos_in)
+                                    n_pdf = f"Presupuesto_{corr_id}_{pat_safe}_V{nueva_version}.pdf"
                                     
                                     url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
                                     if url_doc:
                                         supabase.table("historial_trabajos").update({
                                             "estado": estado_final_db, "total_clp": tn, "pdf_url": url_doc, 
                                             "origen_trabajo": c_origen_val, "usuario_final": c_us_final_val, "tarifa_aplicada": c_tarifa_val, "nombre_cliente_manual": c_cli_fac_val,
-                                            "marca": c_marca_val, "modelo": c_modelo_val,
+                                            "marca": c_marca_val, "modelo": c_modelo_val, "detalle_items": sel_final, "version_presupuesto": nueva_version,
                                             "patente": pat_oficial if pat_oficial != "S/P" else None
                                         }).eq("id_cotizacion", sol_id).execute()
                                     else:
@@ -1370,12 +1513,12 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                                         "origen_trabajo": c_origen_val, "nombre_cliente_manual": c_cli_fac_val,
                                         "usuario_final": c_us_final_val, "tarifa_aplicada": c_tarifa_val,
                                         "estado": estado_final_db, "total_clp": tn, "creado_por": "Cristian",
-                                        "marca": c_marca_val, "modelo": c_modelo_val,
+                                        "marca": c_marca_val, "modelo": c_modelo_val, "detalle_items": sel_final, "version_presupuesto": 1,
                                         "fecha_creacion": fecha_actual
                                     }).execute()
                                     corr_id = str(res.data[0]['id_cotizacion'])
-                                    pdf_b = generar_pdf_oficial(pat_oficial, c_marca_val, c_modelo_val, c_cli_fac_val, c_rut_fac_val, sel_final, tn, False, est, c_us_final_val, obs, corr_id, fecha_pdf_sel, "", fotos_in)
-                                    n_pdf = f"Presupuesto_{corr_id}_{pat_safe}.pdf"
+                                    pdf_b = generar_pdf_oficial(pat_oficial, c_marca_val, c_modelo_val, c_cli_fac_val, c_rut_fac_val, sel_final, tn, False, est, c_us_final_val, obs, corr_id, fecha_pdf_sel, "", 1, fotos_in)
+                                    n_pdf = f"Presupuesto_{corr_id}_{pat_safe}_V1.pdf"
                                     
                                     url_doc = subir_pdf_a_storage(n_pdf, pdf_b)
                                     if url_doc:
