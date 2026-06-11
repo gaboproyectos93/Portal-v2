@@ -286,12 +286,12 @@ def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, ite
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=30) 
     
-    # MARCA DE AGUA PARA CONTROL DE VERSIONES
+    # MARCA DE AGUA PARA CONTROL DE VERSIONES (SIN EMOJIS PARA FPDF LATIN-1)
     if version > 1:
         pdf.set_y(35)
         pdf.set_font('Arial', 'B', 10)
         pdf.set_text_color(220, 0, 0)
-        pdf.cell(0, 6, f"📌 PRESUPUESTO MODIFICADO / APROBACIÓN PARCIAL (V{version})", 0, 1, 'C')
+        pdf.cell(0, 6, f">> PRESUPUESTO MODIFICADO / APROBACIÓN PARCIAL (V{version}) <<", 0, 1, 'C')
         pdf.set_text_color(0, 0, 0)
         pdf.set_y(45)
     else:
@@ -834,7 +834,6 @@ elif (st.session_state.get('rol') == "Planificador" or st.session_state.usuario 
                         if items_actuales and isinstance(items_actuales, list):
                             st.write("Desmarca los ítems que el cliente rechazó:")
                             items_aprobados = []
-                            # CORRECCIÓN DE KEYERROR USANDO ENUMERATE (V31)
                             for idx_it, it in enumerate(items_actuales):
                                 if st.checkbox(f"{it['Cantidad']}x {it['Descripción']} ({format_clp(it['Total_Costo'])})", value=True, key=f"chk_p_{r['id_cotizacion']}_{idx_it}"):
                                     items_aprobados.append(it)
@@ -1073,7 +1072,7 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                         m_txt = get_marca_modelo_txt(r)
                         st.markdown(f"""
                         <div style="background-color: #e6f2ff; padding: 15px; border-left: 5px solid #0066cc; border-radius: 4px; margin-bottom: 10px; color: #111827;">
-                            <h4 style="color: #111827; margin-top: 0;">📤 Enviado al Cliente - Orden N° {r['id_cotizacion']} | Patente: {formatear_patente(r['patente'])}{m_txt}</h4>
+                            <h4 style="color: #111827; margin-top: 0;">📤 Esperando Aprobación - Orden N° {r['id_cotizacion']} | Patente: {formatear_patente(r['patente'])}{m_txt}</h4>
                             <p style="margin-bottom: 0;"><strong>Destino:</strong> {r.get('usuario_final', '')} | <strong>Total Neto:</strong> {format_clp(r['total_clp'])}</p>
                         </div>
                         """, unsafe_allow_html=True)
