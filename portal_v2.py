@@ -297,7 +297,6 @@ def generar_pdf_oficial(patente, marca, modelo, cliente_nombre, cliente_rut, ite
     else:
         pdf.set_y(45)
     
-    # CORRECCIÓN DEL FANTASMA DE LOS DOS PUNTOS (:)
     def fila_dinamica(lbl1, val1, lbl2, val2, is_last=False):
         start_y = pdf.get_y()
         pdf.set_font('Arial', 'B', 9)
@@ -490,7 +489,7 @@ def procesar_aprobacion_parcial(row_data, items_aprobados):
             patente=row_data['patente'], marca=row_data['marca'], modelo=row_data['modelo'],
             cliente_nombre=row_data['nombre_cliente_manual'], cliente_rut=rut_cli,
             items=items_aprobados, total_neto=nuevo_total, is_official=False,
-            estado_trabajo="Aprobado", usuario_final_txt=row_data['usuario_final'],
+            estado_trabajo="Aprobado", usuario_final_txt=row_data.get('usuario_final', ''),
             observaciones="Presupuesto modificado (Aprobación Parcial).", correlativo=str(row_data['id_cotizacion']),
             fecha_presupuesto=datetime.today().date(), n_sap_txt=row_data.get('n_sap', ''), version=nueva_version
         )
@@ -830,14 +829,14 @@ elif (st.session_state.get('rol') == "Planificador" or st.session_state.usuario 
                             notificar_cristian_aprobacion(r['patente'], r['id_cotizacion'])
                         st.success("Trabajo Aprobado."); time.sleep(1); st.rerun()
                         
-                    # MÓDULO DE APROBACIÓN PARCIAL (GABO)
                     with st.expander("✂️ Aprobación Parcial (Modificar ítems)"):
                         items_actuales = r.get('detalle_items', [])
                         if items_actuales and isinstance(items_actuales, list):
                             st.write("Desmarca los ítems que el cliente rechazó:")
                             items_aprobados = []
-                            for it in items_actuales:
-                                if st.checkbox(f"{it['Cantidad']}x {it['Descripción']} ({format_clp(it['Total_Costo'])})", value=True, key=f"chk_p_{r['id_cotizacion']}_{it['Llave']}"):
+                            # CORRECCIÓN DE KEYERROR USANDO ENUMERATE (V31)
+                            for idx_it, it in enumerate(items_actuales):
+                                if st.checkbox(f"{it['Cantidad']}x {it['Descripción']} ({format_clp(it['Total_Costo'])})", value=True, key=f"chk_p_{r['id_cotizacion']}_{idx_it}"):
                                     items_aprobados.append(it)
                             
                             if st.button("Confirmar Aprobación Parcial (Genera Versión Nueva)", key=f"btn_parcial_{r['id_cotizacion']}", type="primary"):
@@ -1052,7 +1051,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                             st.session_state.c_marca = fila.get('marca') if pd.notna(fila.get('marca')) else None
                             st.session_state.c_modelo = fila.get('modelo') if pd.notna(fila.get('modelo')) else None
                             
-                            # Precarga de ítems si es que iba a re-cotizar un borrador
                             items_guardados = fila.get('detalle_items', [])
                             if isinstance(items_guardados, list) and items_guardados:
                                 st.session_state.sel_final_cache = items_guardados
@@ -1084,7 +1082,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                         if pd.notna(r.get('pdf_url')):
                             ca.link_button("👁️ Ver PDF", r['pdf_url'], use_container_width=True)
                             
-                        # BOTÓN RE-COTIZAR (MODIFICAR PRESUPUESTO) PARA CRISTIAN
                         if cb.button("✏️ Modificar", key=f"mod_cr_{r['id_cotizacion']}", use_container_width=True):
                             limpiar_sesiones()
                             st.session_state.sol_activa = r['id_cotizacion']
@@ -1242,7 +1239,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                     def_cli = "KAUFMANN S.A."
                     def_rut = "92.475.000-6"
                 else:
-                    # LIMPIEZA DE CACHÉ DE RUT SI CAMBIÓ DE KAUFMANN A PARTICULAR
                     rut_cache = st.session_state.get('c_rut_fac', '')
                     cli_cache = st.session_state.get('c_cli_fac', '')
                     if rut_cache == "92.475.000-6": rut_cache = ""
@@ -1484,7 +1480,6 @@ elif (st.session_state.get('rol') == "Taller" or st.session_state.usuario == "Cr
                                 
                                 estado_final_db = "Terminado" if est == "Trabajo Realizado" else "Generado"
                                 
-                                # CONTROL DE VERSIONES
                                 version_actual = st.session_state.get('version_presupuesto', 0)
                                 if sol_id and version_actual > 0:
                                     nueva_version = version_actual + 1
